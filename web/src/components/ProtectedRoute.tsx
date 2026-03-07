@@ -1,10 +1,10 @@
 import { Redirect } from "wouter";
-import { useAuth } from "@/lib/auth-context";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, isLoading } = useAuth();
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
