@@ -355,9 +355,17 @@ export function calculateConsumptionAnalytics(
 
   const totalGallons = dailyData.reduce((sum, day) => sum + day.gallonsUsed, 0);
   const totalCost = dailyData.reduce((sum, day) => sum + day.cost, 0);
-  const daysSpan = dailyData.length;
 
-  const dailyAverage = totalGallons / daysSpan;
+  // Use actual calendar span between first and last reading, not just days with consumption.
+  // Otherwise zero-consumption days (flat tank level) are excluded and the average is inflated.
+  const sortedReadings = [...readings].sort(
+    (a, b) => new Date(a.scrapedAt).getTime() - new Date(b.scrapedAt).getTime()
+  );
+  const firstDate = new Date(sortedReadings[0].scrapedAt);
+  const lastDate = new Date(sortedReadings[sortedReadings.length - 1].scrapedAt);
+  const calendarDays = Math.max(1, Math.round((lastDate.getTime() - firstDate.getTime()) / (1000 * 60 * 60 * 24)));
+
+  const dailyAverage = totalGallons / calendarDays;
   const weeklyAverage = dailyAverage * 7;
   const monthlyAverage = dailyAverage * 30;
 
