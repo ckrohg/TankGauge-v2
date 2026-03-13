@@ -4,7 +4,7 @@ import { requireAuth, getUserId } from "./middleware/auth.js";
 import { storage } from "./storage.js";
 import { tankFarmScraper } from "./services/tankfarm-scraper.js";
 import { taskScheduler } from "./services/scheduler.js";
-import { calculateConsumptionAnalytics, calculateMonthlyStats, calculateDailyConsumption, calculateLast28DaysStats, calculateWeeklyConsumption } from "./utils/cost-calculator.js";
+import { calculateConsumptionAnalytics, calculateMonthlyStats, calculateDailyConsumption, calculateDailyConsumptionFilled, calculateLast28DaysStats, calculateWeeklyConsumption } from "./utils/cost-calculator.js";
 import { insertSettingsSchema } from "./schema.js";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -208,7 +208,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getDeliveries(userId),
       ]);
 
-      res.json(calculateDailyConsumption(readings, deliveryList));
+      res.json(calculateDailyConsumptionFilled(readings, deliveryList));
     } catch (error) {
       console.error("Error calculating daily consumption:", error);
       res.status(500).json({ error: "Failed to calculate daily consumption" });

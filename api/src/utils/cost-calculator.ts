@@ -233,6 +233,49 @@ export function calculateDailyConsumption(
 }
 
 /**
+ * Calculate daily consumption with zero-fill for days with no consumption.
+ * Returns a continuous timeline so charts don't have gaps.
+ */
+export function calculateDailyConsumptionFilled(
+  readings: TankReading[],
+  deliveries: Delivery[]
+): DailyConsumption[] {
+  if (readings.length < 2) return [];
+
+  const dailyData = calculateDailyConsumption(readings, deliveries);
+
+  // Build a set of days that have consumption data
+  const consumptionByDate = new Map<string, DailyConsumption>();
+  dailyData.forEach(d => consumptionByDate.set(d.date, d));
+
+  // Determine the full date range from readings
+  const sortedReadings = [...readings].sort(
+    (a, b) => new Date(a.scrapedAt).getTime() - new Date(b.scrapedAt).getTime()
+  );
+  const firstDate = new Date(sortedReadings[0].scrapedAt);
+  const lastDate = new Date(sortedReadings[sortedReadings.length - 1].scrapedAt);
+
+  // Fill in all days in the range
+  const filled: DailyConsumption[] = [];
+  const cursor = new Date(firstDate);
+  cursor.setHours(0, 0, 0, 0);
+
+  while (cursor <= lastDate) {
+    const dateKey = cursor.toISOString().split('T')[0];
+    const existing = consumptionByDate.get(dateKey);
+    filled.push(existing || {
+      date: dateKey,
+      gallonsUsed: 0,
+      cost: 0,
+      pricePerGallon: 0,
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return filled;
+}
+
+/**
  * Calculate monthly statistics
  */
 export function calculateMonthlyStats(
