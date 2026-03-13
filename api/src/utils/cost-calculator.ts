@@ -275,15 +275,10 @@ export function calculateMonthlyStats(
   });
 
   // Sort ascending (oldest first) so charts display time left-to-right
-  const sorted = monthlyStats.sort((a, b) => {
+  return monthlyStats.sort((a, b) => {
     if (a.year !== b.year) return a.year - b.year;
     return new Date(a.month).getMonth() - new Date(b.month).getMonth();
   });
-
-  // Exclude the current incomplete month (misleading when compared to full months)
-  const now = new Date();
-  const currentMonthLabel = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
-  return sorted.filter(m => m.month !== currentMonthLabel);
 }
 
 /**
@@ -432,15 +427,7 @@ export function calculateWeeklyConsumption(
   });
 
   // Sort ascending (oldest first) so charts display time left-to-right
-  const sorted = weeklyData.sort(
+  return weeklyData.sort(
     (a, b) => new Date(a.weekStart).getTime() - new Date(b.weekStart).getTime()
   );
-
-  // Exclude the current incomplete week (misleading when compared to full weeks)
-  const today = new Date();
-  const currentWeekStart = new Date(today);
-  currentWeekStart.setDate(today.getDate() - today.getDay());
-  const currentWeekKey = currentWeekStart.toISOString().split('T')[0];
-
-  return sorted.filter(w => w.weekStart !== currentWeekKey);
 }
