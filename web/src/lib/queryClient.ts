@@ -3,6 +3,10 @@ import { supabase } from "./supabase";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
+if (import.meta.env.PROD && !import.meta.env.VITE_API_URL) {
+  console.error("VITE_API_URL is not set — API calls will fail. Set this env var in Vercel.");
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -77,8 +81,8 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
+      refetchOnWindowFocus: true,
+      staleTime: 5 * 60 * 1000, // 5 minutes
       retry: false,
     },
     mutations: {

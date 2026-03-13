@@ -87,6 +87,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/readings/max-gallons", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = getUserId(req);
+      const maxGallons = await storage.getMaxRecordedGallons(userId);
+      res.json({ maxGallons });
+    } catch (error) {
+      console.error("Error fetching max gallons:", error);
+      res.status(500).json({ error: "Failed to fetch max gallons" });
+    }
+  });
+
   // Deliveries routes
   app.get("/api/deliveries", requireAuth, async (req: Request, res: Response) => {
     try {

@@ -98,6 +98,16 @@ export class DbStorage {
       .limit(options?.limit || 1000);
   }
 
+  async getMaxRecordedGallons(userId: string): Promise<number> {
+    const result = await db
+      .select()
+      .from(tankReadings)
+      .where(eq(tankReadings.userId, userId))
+      .orderBy(desc(tankReadings.remainingGallons))
+      .limit(1);
+    return result[0] ? parseFloat(result[0].remainingGallons) : 0;
+  }
+
   async getLatestTankReading(userId: string): Promise<TankReading | undefined> {
     const result = await db
       .select()

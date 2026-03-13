@@ -136,6 +136,10 @@ export default function Dashboard() {
     }],
   });
 
+  const { data: maxGallonsData } = useQuery<{ maxGallons: number }>({
+    queryKey: ["/api/readings/max-gallons"],
+  });
+
   const { data: settings } = useQuery<Settings>({
     queryKey: ["/api/settings"],
   });
@@ -155,6 +159,7 @@ export default function Dashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/analytics/daily"] });
       queryClient.invalidateQueries({ queryKey: ["/api/analytics/weekly"] });
       queryClient.invalidateQueries({ queryKey: ["/api/analytics/monthly"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/readings/max-gallons"] });
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
       toast({
         title: "Data refreshed",
@@ -221,24 +226,23 @@ export default function Dashboard() {
   // Deduplicate tank level data by date - show only latest reading per day
   const tankLevelData = (() => {
     const dataByDate = new Map<string, { date: string; level: number; timestamp: number }>();
-    
+
     readings.forEach(r => {
       const dateKey = format(new Date(r.scrapedAt), "yyyy-MM-dd");
       const displayDate = format(new Date(r.scrapedAt), "MMM d");
       const timestamp = new Date(r.scrapedAt).getTime();
       const level = parseFloat(r.levelPercentage);
-      
+
       const existing = dataByDate.get(dateKey);
       // Keep the latest reading for each day
       if (!existing || timestamp > existing.timestamp) {
         dataByDate.set(dateKey, { date: displayDate, level, timestamp });
       }
     });
-    
-    // Sort by date and return latest 90 days
+
+    // Sort by date (respects the date range filter from readings query)
     return Array.from(dataByDate.values())
       .sort((a, b) => a.timestamp - b.timestamp)
-      .slice(-90)
       .map(({ date, level }) => ({ date, level }));
   })();
 
@@ -387,6 +391,7 @@ export default function Dashboard() {
                     percentage={latestReading ? parseFloat(latestReading.levelPercentage) : 0}
                     gallons={latestReading ? parseFloat(latestReading.remainingGallons) : 0}
                     capacity={latestReading ? parseFloat(latestReading.tankCapacity) : 0}
+                    maxRecordedGallons={maxGallonsData?.maxGallons}
                   />
                 </div>
                 <div className="flex-1 w-full">
@@ -556,18 +561,20 @@ export default function Dashboard() {
                   onGroupByChange={setGroupBy}
                 />
               </section>
+
+              {tankLevelData.length > 0 && (
+                <section>
+                  <TankLevelChart data={tankLevelData} />
+                </section>
+              )}
+
+              {priceData.length > 0 && (
+                <section>
+                  <PriceChart data={priceData} />
+                </section>
+              )}
             </>
           )}
-
-          {hasMinimalData && (
-            <section>
-              <TankLevelChart data={tankLevelData} />
-            </section>
-          )}
-
-          <section>
-            <PriceChart data={priceData} />
-          </section>
 
           {deliveryTableData.length > 0 && (
             <section>
