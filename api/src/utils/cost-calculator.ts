@@ -239,21 +239,38 @@ export function calculateMonthlyStats(
   readings: TankReading[],
   deliveries: Delivery[]
 ): MonthlyStats[] {
+  if (readings.length < 2) return [];
+
   const dailyData = calculateDailyConsumption(readings, deliveries);
+
+  // Determine the full date range from readings
+  const sortedReadings = [...readings].sort(
+    (a, b) => new Date(a.scrapedAt).getTime() - new Date(b.scrapedAt).getTime()
+  );
+  const firstDate = new Date(sortedReadings[0].scrapedAt);
+  const lastDate = new Date(sortedReadings[sortedReadings.length - 1].scrapedAt);
+
   const monthlyMap = new Map<string, { gallons: number; cost: number; days: Set<string> }>();
 
+  // Create entries for ALL months in the readings range
+  const monthCursor = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
+  while (monthCursor <= lastDate) {
+    const monthKey = `${monthCursor.getFullYear()}-${String(monthCursor.getMonth() + 1).padStart(2, '0')}`;
+    monthlyMap.set(monthKey, { gallons: 0, cost: 0, days: new Set() });
+    monthCursor.setMonth(monthCursor.getMonth() + 1);
+  }
+
+  // Fill in actual consumption data
   dailyData.forEach((day) => {
     const date = new Date(day.date);
     const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
-    if (!monthlyMap.has(monthKey)) {
-      monthlyMap.set(monthKey, { gallons: 0, cost: 0, days: new Set() });
+    const stats = monthlyMap.get(monthKey);
+    if (stats) {
+      stats.gallons += day.gallonsUsed;
+      stats.cost += day.cost;
+      stats.days.add(day.date);
     }
-
-    const stats = monthlyMap.get(monthKey)!;
-    stats.gallons += day.gallonsUsed;
-    stats.cost += day.cost;
-    stats.days.add(day.date);
   });
 
   const monthlyStats: MonthlyStats[] = [];
@@ -372,13 +389,18 @@ export function calculateWeeklyConsumption(
   readings: TankReading[],
   deliveries: Delivery[]
 ): WeeklyConsumption[] {
+  if (readings.length < 2) return [];
+
   const dailyData = calculateDailyConsumption(readings, deliveries);
-  if (dailyData.length === 0) return [];
 
-  const sortedDaily = [...dailyData].sort(
-    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+  // Determine the full date range from readings (not just consumption days)
+  const sortedReadings = [...readings].sort(
+    (a, b) => new Date(a.scrapedAt).getTime() - new Date(b.scrapedAt).getTime()
   );
+  const firstDate = new Date(sortedReadings[0].scrapedAt);
+  const lastDate = new Date(sortedReadings[sortedReadings.length - 1].scrapedAt);
 
+  // Build a map of consumption by week from daily data
   const weeklyMap = new Map<string, {
     start: Date;
     end: Date;
@@ -388,30 +410,40 @@ export function calculateWeeklyConsumption(
     totalPrice: number;
   }>();
 
-  sortedDaily.forEach((day) => {
+  // First, create entries for ALL weeks in the readings range (including zero-consumption weeks)
+  const weekCursor = new Date(firstDate);
+  weekCursor.setDate(weekCursor.getDate() - weekCursor.getDay()); // Start of first week (Sunday)
+  weekCursor.setHours(0, 0, 0, 0);
+
+  while (weekCursor <= lastDate) {
+    const weekKey = weekCursor.toISOString().split('T')[0];
+    const weekEnd = new Date(weekCursor);
+    weekEnd.setDate(weekCursor.getDate() + 6);
+    weeklyMap.set(weekKey, {
+      start: new Date(weekCursor),
+      end: weekEnd,
+      gallons: 0,
+      cost: 0,
+      days: 0,
+      totalPrice: 0,
+    });
+    weekCursor.setDate(weekCursor.getDate() + 7);
+  }
+
+  // Then fill in actual consumption data
+  dailyData.forEach((day) => {
     const date = new Date(day.date);
     const weekStart = new Date(date);
     weekStart.setDate(date.getDate() - date.getDay());
     const weekKey = weekStart.toISOString().split('T')[0];
 
-    if (!weeklyMap.has(weekKey)) {
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekStart.getDate() + 6);
-      weeklyMap.set(weekKey, {
-        start: weekStart,
-        end: weekEnd,
-        gallons: 0,
-        cost: 0,
-        days: 0,
-        totalPrice: 0,
-      });
+    const week = weeklyMap.get(weekKey);
+    if (week) {
+      week.gallons += day.gallonsUsed;
+      week.cost += day.cost;
+      week.days++;
+      week.totalPrice += day.pricePerGallon * day.gallonsUsed;
     }
-
-    const week = weeklyMap.get(weekKey)!;
-    week.gallons += day.gallonsUsed;
-    week.cost += day.cost;
-    week.days++;
-    week.totalPrice += day.pricePerGallon * day.gallonsUsed;
   });
 
   const weeklyData: WeeklyConsumption[] = [];
