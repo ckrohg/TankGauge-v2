@@ -122,3 +122,21 @@ This results in 1 reading/day despite `twice-daily` setting. This is correct beh
 - `schedule_window`: which window the user's first scrape falls in (morning/evening)
 - `schedule_offset_minutes`: minutes after the window start (0-179)
 - `schedule_seed`: deterministic seed from user ID for consistent scheduling across restarts
+
+## Analytics & Chart Notes
+
+### Consumption Calculation
+- `calculateDailyConsumption` compares consecutive readings; only produces entries when `remainingGallons` drops (positive consumption). Uses Weighted Average Cost (WAC) for pricing.
+- `calculateDailyConsumptionFilled` wraps the above but fills in zero-consumption days across the full readings date range, so charts show a continuous timeline.
+- Weekly and monthly aggregations also fill in all periods in the date range, including zero-consumption ones.
+
+### Tank Gauge Resolution
+- Tankfarm.io reports gallons in ~1 gal increments. At low usage (~0.5 gal/day), many consecutive days show identical `remainingGallons`. This is normal — consumption is real but below gauge resolution.
+
+### Average Usage / Days Until Empty
+- Uses **calendar days** (first reading to last reading) as the denominator, not "days with consumption." This is critical because the gauge only detects drops every few days. Using consumption-day count would wildly overstate usage (e.g., 2.9 vs 0.5 gal/day).
+
+### Relative % Gauge
+- Outer ring: absolute tank % (0-80% safe fill range)
+- Inner ring: relative % of max recorded gallons (historical high-water mark)
+- `GET /api/readings/max-gallons` returns the all-time max `remainingGallons` for the user
