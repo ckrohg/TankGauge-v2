@@ -77,18 +77,26 @@ cd api && npm run dev          # tsx watch on :3001
 # DB
 cd api && npm run db:push      # Push Drizzle schema to DB
 
+# Deploy — MUST run from the correct subdirectory
+cd web && npx vercel --prod    # Deploy frontend (from web/)
+cd api && railway up --service TankGauge  # Deploy API (from api/)
+
 # Vercel
 cd web && npx vercel env ls    # List env vars
-cd web && npx vercel --prod    # Deploy to production
 
 # Railway
-railway service TankGauge      # Link service
+railway service TankGauge      # Link service (run once)
 railway variables              # View env vars
 railway logs                   # View logs
 
 # DB queries (use transaction pooler)
 psql "$DATABASE_URL" -c "SELECT ..."
 ```
+
+**Important deploy notes:**
+- Vercel CLI must run from `web/` — deploying from root will fail
+- Railway CLI must run from `api/` — deploying from root causes "Error creating build plan with Railpack"
+- Git author email must be `ckrohg@me.com` (set via `git config user.email`), otherwise Vercel rejects the deploy
 
 ## Data Collection Notes
 
