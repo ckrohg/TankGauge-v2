@@ -78,7 +78,7 @@ cd api && npm run dev          # tsx watch on :3001
 cd api && npm run db:push      # Push Drizzle schema to DB
 
 # Deploy — MUST run from the correct subdirectory
-cd web && npx vercel --prod    # Deploy frontend (from web/)
+npx vercel --prod              # Deploy frontend (from repo root — Vercel root dir is set to web/)
 cd api && railway up --service TankGauge  # Deploy API (from api/)
 
 # Vercel
@@ -94,7 +94,7 @@ psql "$DATABASE_URL" -c "SELECT ..."
 ```
 
 **Important deploy notes:**
-- Vercel CLI must run from `web/` — deploying from root will fail
+- Vercel CLI must run from repo root — Vercel project root directory is configured to `web/`
 - Railway CLI must run from `api/` — deploying from root causes "Error creating build plan with Railpack"
 - Git author email must be `ckrohg@me.com` (set via `git config user.email`), otherwise Vercel rejects the deploy
 
@@ -146,8 +146,8 @@ This results in 1 reading/day despite `twice-daily` setting. This is correct beh
 Users can invite others to view their tank data via Settings > Share Tank Access.
 
 ### How it works
-1. Owner enters an email and clicks invite → creates `tank_shares` row with status `pending`
-2. When the invited user signs up/logs in, `GET /api/settings` auto-activates the share (matches email)
+1. Owner enters an email and clicks invite → creates `tank_shares` row with status `pending` + sends Supabase invite email (`supabaseAdmin.auth.admin.inviteUserByEmail`)
+2. Invited user clicks link in email, signs up, and on first login `GET /api/settings` auto-activates the share (matches email)
 3. Shared user's data endpoints resolve via `getEffectiveUserId()` — if no own tank configured, shows the shared owner's data
 4. Owner can revoke access anytime from Settings
 
