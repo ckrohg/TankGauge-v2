@@ -36,3 +36,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 export function getUserId(req: Request): string {
   return (req as any).userId;
 }
+
+export function getUserEmail(req: Request): string {
+  return (req as any).userEmail;
+}

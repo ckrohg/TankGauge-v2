@@ -52,3 +52,12 @@ export interface User {
   firstName: string | null;
   lastName: string | null;
 }
+
+export interface TankShare {
+  id: string;
+  ownerId: string;
+  sharedEmail: string;
+  sharedUserId: string | null;
+  status: string;
+  createdAt: string;
+}

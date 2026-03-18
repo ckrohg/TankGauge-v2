@@ -1,11 +1,20 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
-import { requireAuth, getUserId } from "./middleware/auth.js";
+import { requireAuth, getUserId, getUserEmail } from "./middleware/auth.js";
 import { storage } from "./storage.js";
 import { tankFarmScraper } from "./services/tankfarm-scraper.js";
 import { taskScheduler } from "./services/scheduler.js";
 import { calculateConsumptionAnalytics, calculateMonthlyStats, calculateDailyConsumption, calculateDailyConsumptionFilled, calculateLast28DaysStats, calculateWeeklyConsumption } from "./utils/cost-calculator.js";
-import { insertSettingsSchema } from "./schema.js";
+import { insertSettingsSchema, insertTankShareSchema } from "./schema.js";
+
+// Resolve the effective data owner: the user's own ID, or the shared owner's ID
+// if the user has no own settings but is shared on someone's tank.
+async function getEffectiveUserId(userId: string): Promise<string> {
+  const ownSettings = await storage.getSettings(userId);
+  if (ownSettings?.tankfarmUsername) return userId; // has own tank configured
+  const sharedOwnerIds = await storage.getActiveShareOwnerIds(userId);
+  return sharedOwnerIds.length > 0 ? sharedOwnerIds[0] : userId;
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   await taskScheduler.initialize();
@@ -14,6 +23,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/settings", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = getUserId(req);
+      const userEmail = getUserEmail(req);
+
+      // Activate any pending shares for this user's email
+      if (userEmail) {
+        await storage.activateShareByEmail(userEmail.toLowerCase(), userId);
+      }
+
       let userSettings = await storage.getSettings(userId);
 
       if (!userSettings) {
@@ -56,7 +72,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Tank readings routes
   app.get("/api/readings", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const { startDate, endDate, limit } = req.query;
 
       const options: any = {};
@@ -78,7 +94,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/readings/latest", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const reading = await storage.getLatestTankReading(userId);
       res.json(reading || null);
     } catch (error) {
@@ -89,7 +105,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/readings/max-gallons", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const maxGallons = await storage.getMaxRecordedGallons(userId);
       res.json({ maxGallons });
     } catch (error) {
@@ -101,7 +117,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Deliveries routes
   app.get("/api/deliveries", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const { startDate, endDate, limit } = req.query;
 
       const options: any = {};
@@ -119,7 +135,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/deliveries/latest", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const delivery = await storage.getLatestDelivery(userId);
       res.json(delivery || null);
     } catch (error) {
@@ -131,7 +147,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Payments routes
   app.get("/api/payments", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const { startDate, endDate, limit } = req.query;
 
       const options: any = {};
@@ -150,7 +166,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Analytics routes
   app.get("/api/analytics", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const { startDate, endDate } = req.query;
 
       const options: any = {};
@@ -175,7 +191,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/analytics/monthly", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const { startDate, endDate } = req.query;
 
       const options: any = {};
@@ -196,7 +212,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/analytics/daily", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const { startDate, endDate } = req.query;
 
       const options: any = {};
@@ -217,7 +233,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/analytics/last-28-days", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const [readings, deliveryList] = await Promise.all([
         storage.getTankReadings(userId),
         storage.getDeliveries(userId),
@@ -232,7 +248,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/analytics/weekly", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      const userId = await getEffectiveUserId(getUserId(req));
       const { startDate, endDate } = req.query;
 
       const options: any = {};
@@ -248,6 +264,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error calculating weekly consumption:", error);
       res.status(500).json({ error: "Failed to calculate weekly consumption" });
+    }
+  });
+
+  // Tank sharing routes
+  app.get("/api/shares", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = getUserId(req);
+      const ownShares = await storage.getTankSharesByOwner(userId);
+      const sharedWithMe = await storage.getTankSharesForUser(userId);
+      res.json({ ownShares, sharedWithMe });
+    } catch (error) {
+      console.error("Error fetching shares:", error);
+      res.status(500).json({ error: "Failed to fetch shares" });
+    }
+  });
+
+  app.post("/api/shares", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = getUserId(req);
+      const userEmail = getUserEmail(req);
+      const { sharedEmail } = insertTankShareSchema.parse(req.body);
+
+      if (sharedEmail.toLowerCase() === userEmail?.toLowerCase()) {
+        return res.status(400).json({ error: "You cannot invite yourself" });
+      }
+
+      const share = await storage.createTankShare(userId, sharedEmail.toLowerCase());
+      res.json(share);
+    } catch (error: any) {
+      console.error("Error creating share:", error);
+      if (error?.code === "23505") {
+        return res.status(400).json({ error: "This email has already been invited" });
+      }
+      res.status(400).json({ error: "Failed to create share" });
+    }
+  });
+
+  app.delete("/api/shares/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = getUserId(req);
+      const share = await storage.revokeTankShare(req.params.id, userId);
+      if (!share) {
+        return res.status(404).json({ error: "Share not found" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error revoking share:", error);
+      res.status(500).json({ error: "Failed to revoke share" });
     }
   });
 

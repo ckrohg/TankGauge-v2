@@ -11,14 +11,14 @@ Split full-stack: React/Vite frontend + Express API + Supabase (DB + Auth).
 ```
 web/     → React 18 + Vite + Tailwind + shadcn/ui + Recharts + React Query
 api/     → Express + Puppeteer + OpenAI + Drizzle ORM + node-cron
-supabase/ → Migrations (001_initial.sql)
+supabase/ → Migrations (001_initial.sql, 002_tank_shares.sql)
 ```
 
 ## Deployment
 
 ### Frontend (Vercel)
-- URL: https://web-hazel-rho-53.vercel.app
-- Project: `tankguage` (Vercel project name, note typo)
+- URL: https://tankguage.vercel.app
+- Project: `tankguage`
 - Vercel Project ID: `prj_XJD3rIrPOXy99m4ME14oDty4mb1C`
 - Org ID: `team_Ye4I8IG4xqOHvOX3Cf9wMTDm`
 - Build: `npm run build` → Vite outputs to `web/dist/`
@@ -41,8 +41,8 @@ supabase/ → Migrations (001_initial.sql)
 - Project URL: https://yuyoenfomyfxsnxwecsn.supabase.co
 - DB pooler: `postgresql://postgres.yuyoenfomyfxsnxwecsn:[pw]@aws-1-us-east-1.pooler.supabase.com:6543/postgres` (transaction mode, 2-min statement timeout)
 - Auth: Email + password, JWT verified server-side via service role key
-- RLS: All tables enforce `auth.uid() = user_id`
-- Tables: `settings`, `tank_readings`, `deliveries`, `payments`
+- RLS: All tables enforce `auth.uid() = user_id` (or `owner_id` for shares)
+- Tables: `settings`, `tank_readings`, `deliveries`, `payments`, `tank_shares`
 
 ## Key Files
 
@@ -140,3 +140,22 @@ This results in 1 reading/day despite `twice-daily` setting. This is correct beh
 - Outer ring: absolute tank % (0-80% safe fill range)
 - Inner ring: relative % of max recorded gallons (historical high-water mark)
 - `GET /api/readings/max-gallons` returns the all-time max `remainingGallons` for the user
+
+## Tank Sharing
+
+Users can invite others to view their tank data via Settings > Share Tank Access.
+
+### How it works
+1. Owner enters an email and clicks invite → creates `tank_shares` row with status `pending`
+2. When the invited user signs up/logs in, `GET /api/settings` auto-activates the share (matches email)
+3. Shared user's data endpoints resolve via `getEffectiveUserId()` — if no own tank configured, shows the shared owner's data
+4. Owner can revoke access anytime from Settings
+
+### API Endpoints
+- `GET /api/shares` — list own shares + shares with me
+- `POST /api/shares` — invite by email (body: `{ sharedEmail }`)
+- `DELETE /api/shares/:id` — revoke a share
+
+### Data Access
+- All data endpoints (readings, deliveries, payments, analytics) use `getEffectiveUserId()` which checks: if user has own tankfarm credentials → use own ID; otherwise check for active shares → use shared owner's ID
+- Shared users get read-only access (cannot trigger scrapes or modify settings)

@@ -1,10 +1,11 @@
 import { db } from "./db.js";
-import { eq, desc, and, gte, lte } from "drizzle-orm";
+import { eq, desc, and, gte, lte, or, ne } from "drizzle-orm";
 import {
   settings,
   tankReadings,
   deliveries,
   payments,
+  tankShares,
   type Settings,
   type InsertSettings,
   type TankReading,
@@ -13,6 +14,7 @@ import {
   type InsertDelivery,
   type Payment,
   type InsertPayment,
+  type TankShare,
 } from "./schema.js";
 
 export class DbStorage {
@@ -238,6 +240,50 @@ export class DbStorage {
       return result[0];
     }
     return await this.createPayment(payment, userId);
+  }
+  // Tank Shares
+  async createTankShare(ownerId: string, sharedEmail: string): Promise<TankShare> {
+    const result = await db
+      .insert(tankShares)
+      .values({ ownerId, sharedEmail, status: "pending" })
+      .returning();
+    return result[0];
+  }
+
+  async getTankSharesByOwner(ownerId: string): Promise<TankShare[]> {
+    return await db
+      .select()
+      .from(tankShares)
+      .where(and(eq(tankShares.ownerId, ownerId), ne(tankShares.status, "revoked")))
+      .orderBy(desc(tankShares.createdAt));
+  }
+
+  async getTankSharesForUser(userId: string): Promise<TankShare[]> {
+    return await db
+      .select()
+      .from(tankShares)
+      .where(and(eq(tankShares.sharedUserId, userId), eq(tankShares.status, "active")));
+  }
+
+  async getActiveShareOwnerIds(userId: string): Promise<string[]> {
+    const shares = await this.getTankSharesForUser(userId);
+    return shares.map(s => s.ownerId);
+  }
+
+  async revokeTankShare(shareId: string, ownerId: string): Promise<TankShare | undefined> {
+    const result = await db
+      .update(tankShares)
+      .set({ status: "revoked" })
+      .where(and(eq(tankShares.id, shareId), eq(tankShares.ownerId, ownerId)))
+      .returning();
+    return result[0];
+  }
+
+  async activateShareByEmail(email: string, userId: string): Promise<void> {
+    await db
+      .update(tankShares)
+      .set({ sharedUserId: userId, status: "active" })
+      .where(and(eq(tankShares.sharedEmail, email), eq(tankShares.status, "pending")));
   }
 }
 

@@ -14,7 +14,7 @@ import DeliveryHistoryTable from "@/components/DeliveryHistoryTable";
 import PaymentHistoryTable from "@/components/PaymentHistoryTable";
 import { Droplet, DollarSign, Calendar, TrendingDown, Clock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { format, subMonths, subDays, startOfMonth, endOfMonth } from "date-fns";
+import { format, subMonths, subDays, addDays, startOfMonth, endOfMonth } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -310,8 +310,10 @@ export default function Dashboard() {
     status: p.status as "paid" | "pending",
   }));
 
-  // Show when the latest reading was scraped (more accurate than settings.lastScrapedAt)
-  const lastSync = latestReading?.scrapedAt
+  // Show when the scraper last checked (settings.lastScrapedAt updates even on dedup)
+  const lastSync = settings?.lastScrapedAt
+    ? format(new Date(settings.lastScrapedAt), "MMM d, h:mm a")
+    : latestReading?.scrapedAt
     ? format(new Date(latestReading.scrapedAt), "MMM d, h:mm a")
     : undefined;
 
@@ -381,11 +383,11 @@ export default function Dashboard() {
         isRefreshing={refreshMutation.isPending}
       />
       
-      <main className="container mx-auto px-8 py-12 max-w-6xl">
-        <div className="space-y-16">
+      <main className="container mx-auto px-4 sm:px-8 py-6 sm:py-12 max-w-6xl">
+        <div className="space-y-8 sm:space-y-16">
           <section>
-            <div className="bg-card border-0 rounded-3xl p-12">
-              <div className="flex flex-col lg:flex-row items-center gap-12">
+            <div className="bg-card border-0 rounded-3xl p-4 sm:p-12">
+              <div className="flex flex-col lg:flex-row items-center gap-6 sm:gap-12">
                 <div className="flex-shrink-0">
                   <TankGauge
                     percentage={latestReading ? parseFloat(latestReading.levelPercentage) : 0}
@@ -395,8 +397,8 @@ export default function Dashboard() {
                   />
                 </div>
                 <div className="flex-1 w-full">
-                  <h2 className="text-xl font-light tracking-tight mb-8 uppercase text-muted-foreground text-xs">Key Metrics</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  <h2 className="text-xl font-light tracking-tight mb-4 sm:mb-8 uppercase text-muted-foreground text-xs">Key Metrics</h2>
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-6">
                     <MetricCard
                       label="Current Level"
                       value={latestReading ? `${parseFloat(latestReading.levelPercentage).toFixed(0)}%` : "N/A"}
@@ -419,6 +421,7 @@ export default function Dashboard() {
                         label="Days Until Empty"
                         value={analytics ? `${analytics.estimatedDaysUntilEmpty}` : "N/A"}
                         subvalue="days"
+                        auxiliaryText={analytics ? `~${format(addDays(new Date(), analytics.estimatedDaysUntilEmpty), "MMM d, yyyy")}` : undefined}
                         icon={Clock}
                         data-testid="metric-days-empty"
                       />
@@ -469,18 +472,18 @@ export default function Dashboard() {
 
           {hasSufficientTrends && (
             <>
-              <section className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-8 -mx-8 px-8 pt-4">
+              <section className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-4 sm:pb-8 -mx-4 sm:-mx-8 px-4 sm:px-8 pt-4">
                 <Card data-testid="card-global-filters" className="border-0 shadow-sm">
-                  <CardHeader className="pb-4">
-                    <div className="flex items-center justify-between">
+                  <CardHeader className="pb-4 px-4 sm:px-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div>
-                        <CardTitle className="text-xl font-light">Analytics Filters</CardTitle>
-                        <CardDescription className="text-xs">Controls apply to all charts and tables below</CardDescription>
+                        <CardTitle className="text-lg sm:text-xl font-light">Analytics Filters</CardTitle>
+                        <CardDescription className="text-xs hidden sm:block">Controls apply to all charts and tables below</CardDescription>
                       </div>
                       <div className="flex items-center gap-3">
                         <Label className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Group By</Label>
-                        <ToggleGroup 
-                          type="single" 
+                        <ToggleGroup
+                          type="single"
                           value={groupBy}
                           onValueChange={(value) => value && setGroupBy(value as GroupBy)}
                           className="gap-1"
@@ -498,46 +501,46 @@ export default function Dashboard() {
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="flex flex-wrap items-center gap-4">
+                  <CardContent className="space-y-4 px-4 sm:px-6">
+                    <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 sm:gap-4">
                       <Label className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Time Range</Label>
-                      <ToggleGroup 
-                        type="single" 
+                      <ToggleGroup
+                        type="single"
                         value={activePreset}
                         onValueChange={handlePresetChange}
-                        className="gap-2"
+                        className="gap-1 sm:gap-2 flex-wrap"
                       >
-                        <ToggleGroupItem value="7d" data-testid="preset-7d" className="px-4 text-sm">
-                          Last 7 Days
+                        <ToggleGroupItem value="7d" data-testid="preset-7d" className="px-3 sm:px-4 text-xs sm:text-sm">
+                          7 Days
                         </ToggleGroupItem>
-                        <ToggleGroupItem value="28d" data-testid="preset-28d" className="px-4 text-sm">
-                          Last 28 Days
+                        <ToggleGroupItem value="28d" data-testid="preset-28d" className="px-3 sm:px-4 text-xs sm:text-sm">
+                          28 Days
                         </ToggleGroupItem>
-                        <ToggleGroupItem value="1m" data-testid="preset-1m" className="px-4 text-sm">
-                          Last Month
+                        <ToggleGroupItem value="1m" data-testid="preset-1m" className="px-3 sm:px-4 text-xs sm:text-sm">
+                          Last Mo
                         </ToggleGroupItem>
-                        <ToggleGroupItem value="3m" data-testid="preset-3m" className="px-4 text-sm">
-                          Last 3 Months
+                        <ToggleGroupItem value="3m" data-testid="preset-3m" className="px-3 sm:px-4 text-xs sm:text-sm">
+                          3 Months
                         </ToggleGroupItem>
                       </ToggleGroup>
-                      
-                      <div className="flex items-center gap-2 ml-auto">
+
+                      <div className="flex items-center gap-2 sm:ml-auto">
                         <Input
                           id="start-date"
                           type="date"
                           value={dateRange.start}
                           onChange={(e) => handleDateRangeChange('start', e.target.value)}
                           data-testid="input-start-date"
-                          className="w-40 text-sm"
+                          className="w-[130px] sm:w-40 text-xs sm:text-sm"
                         />
-                        <span className="text-muted-foreground">to</span>
+                        <span className="text-muted-foreground text-sm">to</span>
                         <Input
                           id="end-date"
                           type="date"
                           value={dateRange.end}
                           onChange={(e) => handleDateRangeChange('end', e.target.value)}
                           data-testid="input-end-date"
-                          className="w-40 text-sm"
+                          className="w-[130px] sm:w-40 text-xs sm:text-sm"
                         />
                       </div>
                     </div>
@@ -546,7 +549,7 @@ export default function Dashboard() {
               </section>
 
               <section>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-8">
                   <ConsumptionChart data={consumptionChartData} groupBy={groupBy} />
                   <MonthlyCostChart data={costChartData} groupBy={groupBy} />
                 </div>

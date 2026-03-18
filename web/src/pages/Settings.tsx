@@ -14,10 +14,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft, Save, RefreshCw, Lock } from "lucide-react";
+import { ArrowLeft, Save, RefreshCw, Lock, UserPlus, X, Users } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import type { Settings } from "@/types";
+import type { Settings, TankShare } from "@/types";
 
 export default function Settings() {
   const { toast } = useToast();
@@ -27,6 +27,7 @@ export default function Settings() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
 
   const { data: settings, isLoading } = useQuery<Settings>({
     queryKey: ["/api/settings"],
@@ -40,6 +41,39 @@ export default function Settings() {
       setTankfarmPassword(settings.tankfarmPassword || "");
     }
   }, [settings]);
+
+  const { data: sharesData } = useQuery<{ ownShares: TankShare[]; sharedWithMe: TankShare[] }>({
+    queryKey: ["/api/shares"],
+  });
+
+  const inviteMutation = useMutation({
+    mutationFn: async (sharedEmail: string) => {
+      return await apiRequest("POST", "/api/shares", { sharedEmail });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shares"] });
+      setInviteEmail("");
+      toast({ title: "Invite sent", description: "They'll see your tank data when they sign in." });
+    },
+    onError: (error: any) => {
+      const msg = error?.message?.includes("already been invited")
+        ? "This email has already been invited."
+        : error?.message?.includes("cannot invite yourself")
+        ? "You can't invite yourself."
+        : "Failed to send invite.";
+      toast({ title: "Invite failed", description: msg, variant: "destructive" });
+    },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: async (shareId: string) => {
+      return await apiRequest("DELETE", `/api/shares/${shareId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shares"] });
+      toast({ title: "Access revoked" });
+    },
+  });
 
   // Update settings mutation
   const updateSettingsMutation = useMutation({
@@ -219,6 +253,88 @@ export default function Settings() {
                   Note: Credentials are stored encrypted in the database and are used to automatically fetch your tank data from tankfarm.io.
                 </p>
               </div>
+            </CardContent>
+          </Card>
+
+          <Card data-testid="card-sharing">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Users className="w-5 h-5" />
+                Share Tank Access
+              </CardTitle>
+              <CardDescription>
+                Invite others to view your tank data by entering their email
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex gap-2">
+                <Input
+                  type="email"
+                  placeholder="email@example.com"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && inviteEmail) {
+                      inviteMutation.mutate(inviteEmail);
+                    }
+                  }}
+                  disabled={inviteMutation.isPending}
+                  data-testid="input-invite-email"
+                />
+                <Button
+                  onClick={() => inviteMutation.mutate(inviteEmail)}
+                  disabled={!inviteEmail || inviteMutation.isPending}
+                  data-testid="button-invite"
+                >
+                  {inviteMutation.isPending ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <UserPlus className="w-4 h-4" />
+                  )}
+                </Button>
+              </div>
+
+              {sharesData?.ownShares && sharesData.ownShares.length > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
+                    Shared With
+                  </Label>
+                  {sharesData.ownShares.map((share) => (
+                    <div key={share.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                      <div>
+                        <div className="text-sm font-medium">{share.sharedEmail}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {share.status === "pending" ? "Pending signup" : "Active"}
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => revokeMutation.mutate(share.id)}
+                        disabled={revokeMutation.isPending}
+                        data-testid={`button-revoke-${share.id}`}
+                      >
+                        <X className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {sharesData?.sharedWithMe && sharesData.sharedWithMe.length > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
+                    Tanks Shared With Me
+                  </Label>
+                  {sharesData.sharedWithMe.map((share) => (
+                    <div key={share.id} className="p-3 rounded-lg bg-muted/50">
+                      <div className="text-sm text-muted-foreground">
+                        Viewing tank from owner
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
 

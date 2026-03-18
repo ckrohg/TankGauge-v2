@@ -60,6 +60,17 @@ export const payments = pgTable("payments", {
   index("idx_payments_user_date").on(table.userId, table.paymentDate),
 ]);
 
+export const tankShares = pgTable("tank_shares", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  ownerId: uuid("owner_id").notNull(),
+  sharedEmail: text("shared_email").notNull(),
+  sharedUserId: uuid("shared_user_id"),
+  status: text("status").notNull().default("pending"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("idx_tank_shares_owner").on(table.ownerId),
+]);
+
 // Insert schemas (for validation)
 export const insertSettingsSchema = z.object({
   scrapingFrequency: z.string().optional(),
@@ -89,7 +100,14 @@ export const insertPaymentSchema = z.object({
   status: z.string().optional(),
 });
 
+export const insertTankShareSchema = z.object({
+  sharedEmail: z.string().email(),
+});
+
 // Types
+export type TankShare = typeof tankShares.$inferSelect;
+export type InsertTankShare = z.infer<typeof insertTankShareSchema>;
+
 export type Settings = typeof settings.$inferSelect;
 export type InsertSettings = z.infer<typeof insertSettingsSchema>;
 

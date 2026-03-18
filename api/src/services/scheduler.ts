@@ -490,6 +490,10 @@ export class TaskScheduler {
         
         if (lastUpdateTime === newUpdateTime) {
           console.log(`[Scheduler] User ${userId}: tankfarm_last_update unchanged (${latestReading.tankfarmLastUpdate.toISOString()}). Skipping duplicate.`);
+          // Still update lastScrapedAt so the dashboard shows when we last checked
+          if (settings) {
+            await storage.updateLastScrapedAt(settings.id, userId);
+          }
           return;
         } else {
           console.log(`[Scheduler] User ${userId}: tankfarm_last_update changed from ${latestReading.tankfarmLastUpdate.toISOString()} to ${new Date(data.tankReading.tankfarmLastUpdate).toISOString()}`);
