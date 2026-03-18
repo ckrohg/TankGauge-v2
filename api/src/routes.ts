@@ -291,6 +291,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const share = await storage.createTankShare(userId, sharedEmail.toLowerCase());
+
+      // Send invite email via Supabase Auth
+      try {
+        const { supabaseAdmin } = await import("./middleware/auth.js");
+        await supabaseAdmin.auth.admin.inviteUserByEmail(sharedEmail.toLowerCase(), {
+          redirectTo: `${process.env.CORS_ORIGINS?.split(",")[0] || "https://tankguage.vercel.app"}`,
+        });
+        console.log(`[Shares] Invite email sent to ${sharedEmail}`);
+      } catch (emailErr: any) {
+        // User may already exist — that's fine, share still works
+        console.log(`[Shares] Invite email skipped for ${sharedEmail}: ${emailErr?.message}`);
+      }
+
       res.json(share);
     } catch (error: any) {
       console.error("Error creating share:", error);
