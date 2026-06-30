@@ -1,6 +1,8 @@
 import cron, { type ScheduledTask } from "node-cron";
 import { storage } from "../storage.js";
 import { tankFarmScraper } from "./tankfarm-scraper.js";
+import { sendWeeklyUpdate, sendLowLevelAlert } from "./email.js";
+import { effectivePercent, type PercentBasis } from "../utils/cost-calculator.js";
 import type { Settings, InsertTankReading, TankReading } from "../schema.js";
 import {
   generateScheduleConfig,
@@ -34,7 +36,10 @@ export class TaskScheduler {
     
     // Start per-frequency cron jobs
     this.startFrequencyCrons();
-    
+
+    // Start the weekly email digest cron
+    this.startWeeklyEmailCron();
+
     console.log("=".repeat(80));
     console.log(`[SCHEDULER] ✅ INITIALIZED WITH ${this.userSchedules.length} USER SCHEDULES`);
     console.log("=".repeat(80));
@@ -510,6 +515,9 @@ export class TaskScheduler {
       const savedReading = await storage.createTankReading(data.tankReading, userId);
       console.log(`[Scheduler] User ${userId}: ✓ Tank reading saved successfully! ID:`, savedReading.id);
 
+      // Fire a low-level alert if this fresh reading crossed below the threshold.
+      await this.checkLowLevelAlert(userId, settings, savedReading);
+
       // Save deliveries if available (handles duplicates via upsert)
       if (data.deliveries && data.deliveries.length > 0) {
         console.log(`[Scheduler] User ${userId}: Saving ${data.deliveries.length} deliveries...`);
@@ -573,6 +581,100 @@ export class TaskScheduler {
       // Always clean up the active scraping set
       this.activeScrapingUsers.delete(userId);
     }
+  }
+
+  /**
+   * Send a low-fuel alert when a fresh reading dips to/below the user's threshold.
+   * Hysteresis: only one alert per dip — it re-arms once the level recovers a few
+   * points above the threshold, so we don't email on every scrape while it sits low.
+   */
+  private async checkLowLevelAlert(
+    userId: string,
+    settings: Settings | undefined,
+    reading: TankReading
+  ): Promise<void> {
+    if (!settings || !settings.lowAlertEnabled) return;
+
+    const gauge = parseFloat(reading.levelPercentage);
+    const gallons = parseFloat(reading.remainingGallons);
+    if (Number.isNaN(gauge) || Number.isNaN(gallons)) return;
+
+    // Interpret the threshold in the user's chosen basis (relative to max fill by default).
+    const basis = (settings.percentBasis as PercentBasis) || "relative";
+    const maxGallons = basis === "relative" ? await storage.getMaxRecordedGallons(userId) : undefined;
+    const level = effectivePercent(gallons, gauge, basis, maxGallons);
+
+    const threshold =
+      settings.lowAlertPct !== null && settings.lowAlertPct !== undefined
+        ? Number(settings.lowAlertPct)
+        : 20;
+    const HYSTERESIS = 5; // points above threshold required to re-arm
+
+    try {
+      if (level <= threshold) {
+        if (!settings.lowAlertSentAt) {
+          const sent = await sendLowLevelAlert(userId, settings, reading, maxGallons);
+          if (sent) {
+            await storage.updateSettings(settings.id, userId, { lowAlertSentAt: new Date() });
+          }
+        }
+      } else if (level > threshold + HYSTERESIS && settings.lowAlertSentAt) {
+        // Recovered — re-arm for the next dip.
+        await storage.updateSettings(settings.id, userId, { lowAlertSentAt: null });
+      }
+    } catch (err) {
+      console.error(`[Scheduler] Low-level alert check failed for user ${userId}:`, err);
+    }
+  }
+
+  /**
+   * Weekly digest cron — Mondays 14:00 UTC (~8-9am US). One email per data owner.
+   */
+  private startWeeklyEmailCron(): void {
+    const cronExpression = "0 14 * * 1";
+    const task = cron.schedule(cronExpression, async () => {
+      await this.runWeeklyEmails().catch((err) =>
+        console.error("[SCHEDULER] Weekly email run failed:", err)
+      );
+    });
+    this.cronTasks.set("weekly-email", task);
+    console.log(`[SCHEDULER] ✅ Started weekly email cron: ${cronExpression}`);
+  }
+
+  private async runWeeklyEmails(): Promise<void> {
+    console.log("[SCHEDULER] 📧 Running weekly email digest...");
+    const allSettings = await storage.getAllSettings();
+    const now = new Date();
+    let sent = 0;
+
+    for (const settings of allSettings) {
+      if (!settings.weeklyEmailEnabled) continue;
+      // Only data owners (users with their own tankfarm tank) get a digest.
+      if (!settings.tankfarmUsername || !settings.tankfarmPassword) continue;
+
+      // Dedup guard: skip if we already sent within the last 6 days
+      // (protects against a restart re-registering the cron near fire time).
+      if (settings.weeklyEmailLastSentAt) {
+        const daysSince =
+          (now.getTime() - new Date(settings.weeklyEmailLastSentAt).getTime()) /
+          (1000 * 60 * 60 * 24);
+        if (daysSince < 6) continue;
+      }
+
+      try {
+        const ok = await sendWeeklyUpdate(settings.userId, settings);
+        if (ok) {
+          await storage.updateSettings(settings.id, settings.userId, {
+            weeklyEmailLastSentAt: now,
+          });
+          sent++;
+        }
+      } catch (err) {
+        console.error(`[SCHEDULER] Weekly email failed for user ${settings.userId}:`, err);
+      }
+    }
+
+    console.log(`[SCHEDULER] 📧 Weekly digest complete — ${sent} sent`);
   }
 
   stop(): void {

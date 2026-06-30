@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, decimal, integer, uuid, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, decimal, integer, boolean, uuid, index } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
 // Users are managed by Supabase Auth (auth.users).
@@ -19,6 +19,16 @@ export const settings = pgTable("settings", {
   consecutiveFailures: integer("consecutive_failures").notNull().default(0),
   lastFailureReason: text("last_failure_reason"),
   lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
+  // Notification preferences + state (see migration 003)
+  refillThresholdPct: decimal("refill_threshold_pct", { precision: 5, scale: 2 }).notNull().default("30"),
+  lowAlertPct: decimal("low_alert_pct", { precision: 5, scale: 2 }).notNull().default("20"),
+  weeklyEmailEnabled: boolean("weekly_email_enabled").notNull().default(true),
+  lowAlertEnabled: boolean("low_alert_enabled").notNull().default(true),
+  // 'relative' = % of historical max fill (default), 'absolute' = raw gauge %
+  percentBasis: text("percent_basis").notNull().default("relative"),
+  notifyEmail: text("notify_email"),
+  lowAlertSentAt: timestamp("low_alert_sent_at", { withTimezone: true }),
+  weeklyEmailLastSentAt: timestamp("weekly_email_last_sent_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -76,6 +86,13 @@ export const insertSettingsSchema = z.object({
   scrapingFrequency: z.string().optional(),
   tankfarmUsername: z.string().nullable().optional(),
   tankfarmPassword: z.string().nullable().optional(),
+  // Notification preferences. Decimal columns are stored as strings in Drizzle.
+  refillThresholdPct: z.coerce.number().min(1).max(95).transform((n) => String(n)).optional(),
+  lowAlertPct: z.coerce.number().min(1).max(95).transform((n) => String(n)).optional(),
+  weeklyEmailEnabled: z.boolean().optional(),
+  lowAlertEnabled: z.boolean().optional(),
+  percentBasis: z.enum(["relative", "absolute"]).optional(),
+  notifyEmail: z.string().email().nullable().optional(),
 });
 
 export const insertTankReadingSchema = z.object({

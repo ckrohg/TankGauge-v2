@@ -35,6 +35,7 @@ supabase/ → Migrations (001_initial.sql, 002_tank_shares.sql)
 - Health check: `GET /health` (30s timeout)
 - Restart policy: on_failure, max 3 retries
 - Env vars: `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`, `CORS_ORIGINS`, `PORT`
+- Email (Resend) env vars: `RESEND_API_KEY` (required to send), `RESEND_FROM_EMAIL` (default `TankGauge <onboarding@resend.dev>`), `RESEND_TEST_TO` (redirect all email to this address for testing), `APP_URL` (dashboard link, default `https://tankguage.vercel.app`)
 - CLI: `railway service TankGauge` to link, then `railway variables` to view/edit
 
 ### Supabase
@@ -43,6 +44,7 @@ supabase/ → Migrations (001_initial.sql, 002_tank_shares.sql)
 - Auth: Email + password, JWT verified server-side via service role key
 - RLS: All tables enforce `auth.uid() = user_id` (or `owner_id` for shares)
 - Tables: `settings`, `tank_readings`, `deliveries`, `payments`, `tank_shares`
+- Migrations applied in order: `001_initial.sql`, `002_tank_shares.sql`, `003_notifications.sql` (notification prefs/state columns), `004_percent_basis.sql` (`percent_basis` column)
 
 ## Key Files
 
@@ -142,6 +144,25 @@ This results in ~1 reading/day despite the `twice-daily` setting. This is correc
 - Outer ring: absolute tank % (0-80% safe fill range)
 - Inner ring: relative % of max recorded gallons (historical high-water mark)
 - `GET /api/readings/max-gallons` returns the all-time max `remainingGallons` for the user
+
+## Email Notifications (Resend)
+
+Two email types, sent server-side from the Railway API via Resend. No-ops with a log line if `RESEND_API_KEY` is unset.
+
+- **Weekly digest** — `scheduler.ts` cron `0 14 * * 1` (Mon 14:00 UTC). One email per data owner (`weekly_email_enabled` + tankfarm creds). TLDR: current level, refill-by estimate, week's usage + cost, market price (current + 7-day delta + 30-day range), and any deliveries that week. Dedup guard via `weekly_email_last_sent_at` (skips if sent < 6 days ago).
+- **Low-level alert** — fired from `runScrapeTask` when a *newly saved* reading is at/below `low_alert_pct` (default 20%). Hysteresis via `low_alert_sent_at`: one alert per dip, re-arms only after the level recovers > threshold + 5 points.
+
+Service: `api/src/services/email.ts` (Resend client, recipient resolution, HTML templates, weekly-summary builder). Recipient = `settings.notify_email` or the user's Supabase Auth email; `RESEND_TEST_TO` overrides all recipients (subject gets a `[test→real]` tag) so the whole flow can be validated against one inbox before a sending domain is DNS-verified.
+
+Per-user prefs live on `settings`: `refill_threshold_pct` (30), `low_alert_pct` (20), `weekly_email_enabled`, `low_alert_enabled`, `notify_email`. Editable in **Settings → Email Notifications** (toggles, threshold inputs, optional send-to override) via `PUT /api/settings`.
+
+`POST /api/notifications/test` (auth) sends the real weekly digest to the requesting user on demand — backs the "Send test digest" button. Uses `getEffectiveUserId` for data so a shared viewer can preview the owner's tank.
+
+### Refill-by estimate
+
+`calculateRefillEstimate` (`cost-calculator.ts`) replaces the old "days until empty". Targets the **refill threshold** (not 0 gal), blends a 21-day trailing burn rate (responsive to season) with the lifetime rate (stable, capped at 80% recent weight), and returns a point date + soonest/latest band + confidence. Shared by `/api/analytics` (dashboard "Refill By" card) and the weekly email so they never disagree.
+
+**Percent basis** (`settings.percent_basis`, default `relative`): thresholds and the refill/alert percentages are interpreted as either `relative` (% of historical max fill — `current ÷ max gallons`, the all-time `remaining_gallons` high) or `absolute` (raw tankfarm gauge %, ~80% = full). `effectivePercent()` does the conversion; `calculateRefillEstimate` takes a `RefillOptions` object (`refillThresholdPercent`, `percentBasis`, `maxGallons`). The basis is surfaced in the Settings UI, the dashboard card ("of full"/"gauge"), and both emails. Relative basis lines up with the dashboard's inner relative ring (both use the same max-gallons reference).
 
 ## Tank Sharing
 

@@ -11,6 +11,12 @@ export interface Settings {
   consecutiveFailures: number;
   lastFailureReason: string | null;
   lastFailureAt: string | null;
+  refillThresholdPct: string | null;
+  lowAlertPct: string | null;
+  weeklyEmailEnabled: boolean;
+  lowAlertEnabled: boolean;
+  percentBasis: string;
+  notifyEmail: string | null;
   createdAt: string;
   updatedAt: string;
 }

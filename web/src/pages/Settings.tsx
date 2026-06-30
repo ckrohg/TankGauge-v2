@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -14,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft, Save, RefreshCw, Lock, UserPlus, X, Users } from "lucide-react";
+import { ArrowLeft, Save, RefreshCw, Lock, UserPlus, X, Users, Bell, Mail } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import type { Settings, TankShare } from "@/types";
@@ -28,6 +29,12 @@ export default function Settings() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
+  const [weeklyEmailEnabled, setWeeklyEmailEnabled] = useState(true);
+  const [lowAlertEnabled, setLowAlertEnabled] = useState(true);
+  const [refillThresholdPct, setRefillThresholdPct] = useState("30");
+  const [lowAlertPct, setLowAlertPct] = useState("20");
+  const [percentBasis, setPercentBasis] = useState("relative");
+  const [notifyEmail, setNotifyEmail] = useState("");
 
   const { data: settings, isLoading } = useQuery<Settings>({
     queryKey: ["/api/settings"],
@@ -39,6 +46,16 @@ export default function Settings() {
       setFrequency(settings.scrapingFrequency || "twice-daily");
       setTankfarmUsername(settings.tankfarmUsername || "");
       setTankfarmPassword(settings.tankfarmPassword || "");
+      setWeeklyEmailEnabled(settings.weeklyEmailEnabled ?? true);
+      setLowAlertEnabled(settings.lowAlertEnabled ?? true);
+      setRefillThresholdPct(
+        settings.refillThresholdPct != null ? String(Math.round(Number(settings.refillThresholdPct))) : "30"
+      );
+      setLowAlertPct(
+        settings.lowAlertPct != null ? String(Math.round(Number(settings.lowAlertPct))) : "20"
+      );
+      setPercentBasis(settings.percentBasis || "relative");
+      setNotifyEmail(settings.notifyEmail || "");
     }
   }, [settings]);
 
@@ -96,6 +113,46 @@ export default function Settings() {
       toast({
         title: "Save failed",
         description: error.message || "Failed to update settings. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const notifMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest("PUT", "/api/settings", {
+        weeklyEmailEnabled,
+        lowAlertEnabled,
+        refillThresholdPct: Math.min(95, Math.max(1, Number(refillThresholdPct) || 30)),
+        lowAlertPct: Math.min(95, Math.max(1, Number(lowAlertPct) || 20)),
+        percentBasis,
+        notifyEmail: notifyEmail.trim() || null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({ title: "Notifications saved", description: "Your email preferences have been updated." });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Save failed",
+        description: error.message || "Failed to update notifications.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const testDigestMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest("POST", "/api/notifications/test");
+    },
+    onSuccess: () => {
+      toast({ title: "Test digest sent", description: "Check your inbox for the weekly summary." });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Couldn't send test",
+        description: error.message || "Make sure email is configured and you have tank data.",
         variant: "destructive",
       });
     },
@@ -335,6 +392,138 @@ export default function Settings() {
                   ))}
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          <Card data-testid="card-notifications">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Bell className="w-5 h-5" />
+                Email Notifications
+              </CardTitle>
+              <CardDescription>
+                Weekly tank digest and low-fuel alerts, sent to your email
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="switch-weekly">Weekly digest</Label>
+                  <p className="text-xs text-muted-foreground">A tank summary every Monday morning.</p>
+                </div>
+                <Switch
+                  id="switch-weekly"
+                  checked={weeklyEmailEnabled}
+                  onCheckedChange={setWeeklyEmailEnabled}
+                  data-testid="switch-weekly"
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="switch-low-alert">Low-fuel alerts</Label>
+                  <p className="text-xs text-muted-foreground">Email me when the tank gets low.</p>
+                </div>
+                <Switch
+                  id="switch-low-alert"
+                  checked={lowAlertEnabled}
+                  onCheckedChange={setLowAlertEnabled}
+                  data-testid="switch-low-alert"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="percentBasis">Percentages are measured</Label>
+                <Select value={percentBasis} onValueChange={setPercentBasis}>
+                  <SelectTrigger id="percentBasis" data-testid="select-percent-basis">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="relative">Relative to a full fill (recommended)</SelectItem>
+                    <SelectItem value="absolute">Absolute gauge reading</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {percentBasis === "relative"
+                    ? "100% = your tank's historical high (a full fill). More intuitive."
+                    : "Raw tankfarm.io gauge, where a full propane tank reads ~80%."}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="refillThreshold">Refill target (%)</Label>
+                  <Input
+                    id="refillThreshold"
+                    type="number"
+                    min={1}
+                    max={95}
+                    value={refillThresholdPct}
+                    onChange={(e) => setRefillThresholdPct(e.target.value)}
+                    data-testid="input-refill-threshold"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Estimate counts down to this {percentBasis === "relative" ? "% of full" : "gauge %"}.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="lowAlert">Alert at (%)</Label>
+                  <Input
+                    id="lowAlert"
+                    type="number"
+                    min={1}
+                    max={95}
+                    value={lowAlertPct}
+                    onChange={(e) => setLowAlertPct(e.target.value)}
+                    data-testid="input-low-alert"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Low-fuel alert at this {percentBasis === "relative" ? "% of full" : "gauge %"}.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="notifyEmail">Send to (optional)</Label>
+                <Input
+                  id="notifyEmail"
+                  type="email"
+                  placeholder="Defaults to your account email"
+                  value={notifyEmail}
+                  onChange={(e) => setNotifyEmail(e.target.value)}
+                  data-testid="input-notify-email"
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  className="gap-2"
+                  onClick={() => notifMutation.mutate()}
+                  disabled={notifMutation.isPending}
+                  data-testid="button-save-notifications"
+                >
+                  {notifMutation.isPending ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4" />
+                  )}
+                  Save
+                </Button>
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  onClick={() => testDigestMutation.mutate()}
+                  disabled={testDigestMutation.isPending}
+                  data-testid="button-test-digest"
+                >
+                  {testDigestMutation.isPending ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Mail className="w-4 h-4" />
+                  )}
+                  Send test digest
+                </Button>
+              </div>
             </CardContent>
           </Card>
 

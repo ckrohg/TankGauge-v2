@@ -12,9 +12,9 @@ import ConsumptionChart from "@/components/ConsumptionChart";
 import ConsumptionTable from "@/components/ConsumptionTable";
 import DeliveryHistoryTable from "@/components/DeliveryHistoryTable";
 import PaymentHistoryTable from "@/components/PaymentHistoryTable";
-import { Droplet, DollarSign, Calendar, TrendingDown, Clock } from "lucide-react";
+import { Droplet, DollarSign, Calendar, TrendingDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { format, subMonths, subDays, addDays, startOfMonth, endOfMonth } from "date-fns";
+import { format, subMonths, subDays, startOfMonth, endOfMonth } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -29,6 +29,21 @@ function parseDateOnly(dateInput: string | Date): Date {
   return new Date(year, month - 1, day);
 }
 
+interface RefillEstimate {
+  status: 'ok' | 'refill_now' | 'insufficient_data';
+  percentBasis: 'relative' | 'absolute';
+  currentPercent: number;
+  refillThresholdPercent: number;
+  dailyRate: number;
+  daysUntilRefill: number | null;
+  daysUntilRefillSoonest: number | null;
+  daysUntilRefillLatest: number | null;
+  refillByDate: string | null;
+  refillBySoonest: string | null;
+  refillByLatest: string | null;
+  confidence: 'high' | 'medium' | 'low';
+}
+
 interface Analytics {
   dailyAverage: number;
   weeklyAverage: number;
@@ -36,6 +51,7 @@ interface Analytics {
   estimatedDaysUntilEmpty: number;
   costSinceLastDelivery: number;
   avgCostPerDay: number;
+  refillEstimate: RefillEstimate | null;
 }
 
 interface Last28DaysStats {
@@ -326,9 +342,32 @@ export default function Dashboard() {
     : 0;
   
   const trendDirection = past28DaysCostVsAvg > 0 ? 'higher' : 'lower';
-  const trendText = avgMonthlyCost > 0 
+  const trendText = avgMonthlyCost > 0
     ? `${Math.abs(past28DaysCostVsAvg).toFixed(0)}% ${trendDirection} than avg ($${avgMonthlyCost.toFixed(2)})`
     : 'Calculating average...';
+
+  // Refill-by estimate (server-computed; targets the refill threshold, not empty)
+  const refill = analytics?.refillEstimate ?? null;
+  let refillValue = "N/A";
+  let refillSub: string | undefined;
+  let refillAux: string | undefined;
+  if (refill) {
+    const basisLabel = refill.percentBasis === 'relative' ? 'of full' : 'gauge';
+    const thresholdLabel = `${Number(refill.refillThresholdPercent).toFixed(0)}% ${basisLabel}`;
+    if (refill.status === 'refill_now') {
+      refillValue = "Now";
+      refillSub = `at/below ${thresholdLabel}`;
+    } else if (refill.status === 'ok' && refill.refillByDate) {
+      refillValue = format(parseDateOnly(refill.refillByDate), "MMM d");
+      refillSub = `to ${thresholdLabel} · ${refill.daysUntilRefill}d out`;
+      if (refill.refillBySoonest && refill.refillByLatest) {
+        refillAux = `${format(parseDateOnly(refill.refillBySoonest), "MMM d")} – ${format(parseDateOnly(refill.refillByLatest), "MMM d")} · ${refill.confidence}`;
+      }
+    } else {
+      refillValue = "—";
+      refillSub = "Need more data";
+    }
+  }
 
   const consumptionChartData = groupBy === 'day' 
     ? dailyConsumption.map(d => ({
@@ -416,14 +455,14 @@ export default function Dashboard() {
                         data-testid="metric-weekly-usage"
                       />
                     )}
-                    {hasSufficientTrends && (
+                    {hasSufficientTrends && refill && (
                       <MetricCard
-                        label="Days Until Empty"
-                        value={analytics ? `${analytics.estimatedDaysUntilEmpty}` : "N/A"}
-                        subvalue="days"
-                        auxiliaryText={analytics ? `~${format(addDays(new Date(), analytics.estimatedDaysUntilEmpty), "MMM d, yyyy")}` : undefined}
-                        icon={Clock}
-                        data-testid="metric-days-empty"
+                        label="Refill By"
+                        value={refillValue}
+                        subvalue={refillSub}
+                        auxiliaryText={refillAux}
+                        icon={Calendar}
+                        data-testid="metric-refill-by"
                       />
                     )}
                     {hasMonthlyTrends && (

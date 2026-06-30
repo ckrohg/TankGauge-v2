@@ -22,6 +22,43 @@ export interface MonthlyStats {
   daysInPeriod: number;
 }
 
+// How a threshold percentage is interpreted:
+//  - 'relative'  → % of the historical max fill (current ÷ all-time max gallons).
+//                  Intuitive ("50% of a full tank"); the default.
+//  - 'absolute'  → the raw tankfarm gauge %, where a full propane tank reads ~80%.
+export type PercentBasis = "relative" | "absolute";
+
+export interface RefillOptions {
+  refillThresholdPercent?: number;
+  percentBasis?: PercentBasis;
+  maxGallons?: number; // all-time max remainingGallons; used for the 'relative' basis
+}
+
+export interface RefillEstimate {
+  // 'ok' = future date estimated; 'refill_now' = already at/below threshold;
+  // 'insufficient_data' = no measurable usage to extrapolate from.
+  status: "ok" | "refill_now" | "insufficient_data";
+  percentBasis: PercentBasis;
+  currentGallons: number;
+  currentPercent: number; // in the chosen basis
+  refillThresholdPercent: number;
+  refillThresholdGallons: number;
+  gallonsUntilRefill: number;
+  // gal/day rates used to build the estimate
+  dailyRate: number; // blended point estimate
+  recentDailyRate: number; // trailing-window rate (responsive to current season)
+  lifetimeDailyRate: number; // full-history rate (stable)
+  recentWindowDays: number;
+  // Point estimate + a soonest/latest band from the spread of the rates above
+  daysUntilRefill: number | null;
+  daysUntilRefillSoonest: number | null;
+  daysUntilRefillLatest: number | null;
+  refillByDate: string | null; // yyyy-mm-dd, point estimate
+  refillBySoonest: string | null;
+  refillByLatest: string | null;
+  confidence: "high" | "medium" | "low";
+}
+
 export interface ConsumptionAnalytics {
   dailyAverage: number;
   weeklyAverage: number;
@@ -29,6 +66,7 @@ export interface ConsumptionAnalytics {
   estimatedDaysUntilEmpty: number;
   costSinceLastDelivery: number;
   avgCostPerDay: number;
+  refillEstimate: RefillEstimate | null;
 }
 
 export interface Last28DaysStats {
@@ -341,12 +379,207 @@ export function calculateMonthlyStats(
   });
 }
 
+// Trailing window used to capture the *current* season's burn rate.
+const REFILL_RECENT_WINDOW_DAYS = 21;
+
+function toDateOnly(d: Date): string {
+  return d.toISOString().split("T")[0];
+}
+
+function addDaysToDate(base: Date, days: number): Date {
+  return new Date(base.getTime() + Math.round(days) * 24 * 60 * 60 * 1000);
+}
+
+// Average daily gallons consumed over a set of readings, measured against the
+// actual calendar span (not just days with a detected drop) so that flat/low-usage
+// days are not excluded — same convention as calculateConsumptionAnalytics.
+function dailyUsageRate(readings: TankReading[], deliveries: Delivery[]): number {
+  if (readings.length < 2) return 0;
+  const daily = calculateDailyConsumption(readings, deliveries);
+  const totalGallons = daily.reduce((sum, d) => sum + d.gallonsUsed, 0);
+  const sorted = [...readings].sort(
+    (a, b) => new Date(a.scrapedAt).getTime() - new Date(b.scrapedAt).getTime()
+  );
+  const spanDays = Math.max(
+    1,
+    Math.round(
+      (new Date(sorted[sorted.length - 1].scrapedAt).getTime() -
+        new Date(sorted[0].scrapedAt).getTime()) /
+        (1000 * 60 * 60 * 24)
+    )
+  );
+  return totalGallons / spanDays;
+}
+
+/**
+ * Convert a reading into a percentage in the requested basis.
+ *  - 'relative' → current gallons as a share of the historical max fill.
+ *  - 'absolute' → the raw tankfarm gauge percentage.
+ * Falls back to the gauge % if a relative basis is requested without a max.
+ */
+export function effectivePercent(
+  currentGallons: number,
+  gaugePercent: number,
+  basis: PercentBasis,
+  maxGallons?: number
+): number {
+  if (basis === "relative" && maxGallons && maxGallons > 0) {
+    return (currentGallons / maxGallons) * 100;
+  }
+  return gaugePercent;
+}
+
+/**
+ * Estimate when the tank will reach the refill threshold (default 30%).
+ *
+ * Upgrades over the old `estimatedDaysUntilEmpty`:
+ *  - Targets a *refill* threshold (you reorder before empty), not 0 gallons.
+ *  - Threshold is interpreted in the chosen basis (relative to max fill by
+ *    default, or the absolute gauge %).
+ *  - Blends a recent trailing-window rate (responsive to the current season —
+ *    propane burn swings hard between winter heating and summer) with the stable
+ *    full-history rate, so a cold snap doesn't take weeks to show up.
+ *  - Returns a soonest/latest band and a confidence level instead of one hard date.
+ *
+ * Shared by the dashboard card and the weekly email so they never disagree.
+ */
+export function calculateRefillEstimate(
+  readings: TankReading[],
+  deliveries: Delivery[],
+  opts: RefillOptions & { now?: Date } = {}
+): RefillEstimate | null {
+  if (readings.length === 0) return null;
+
+  const refillThresholdPercent = opts.refillThresholdPercent ?? 30;
+  const percentBasis: PercentBasis = opts.percentBasis ?? "relative";
+  const now = opts.now ?? new Date();
+
+  const sorted = [...readings].sort(
+    (a, b) => new Date(a.scrapedAt).getTime() - new Date(b.scrapedAt).getTime()
+  );
+  const latest = sorted[sorted.length - 1];
+  const currentGallons = parseFloat(latest.remainingGallons);
+  const gaugePercent = parseFloat(latest.levelPercentage);
+
+  // All-time max fill — prefer the value passed in (queried across all readings),
+  // else derive it from whatever readings we have.
+  const maxGallons =
+    opts.maxGallons && opts.maxGallons > 0
+      ? opts.maxGallons
+      : Math.max(...sorted.map((r) => parseFloat(r.remainingGallons)));
+
+  const currentPercent = effectivePercent(currentGallons, gaugePercent, percentBasis, maxGallons);
+
+  // Map the percentage threshold to gallons in the chosen basis.
+  let refillThresholdGallons: number;
+  if (percentBasis === "relative" && maxGallons > 0) {
+    refillThresholdGallons = maxGallons * (refillThresholdPercent / 100);
+  } else {
+    // Absolute: gallons-per-gauge-percent × threshold, robust to capacity defs.
+    const gallonsPerPercent = gaugePercent > 0 ? currentGallons / gaugePercent : 0;
+    refillThresholdGallons = gallonsPerPercent * refillThresholdPercent;
+  }
+  const gallonsUntilRefill = currentGallons - refillThresholdGallons;
+
+  const lifetimeDailyRate = dailyUsageRate(sorted, deliveries);
+
+  const windowStart = new Date(now.getTime() - REFILL_RECENT_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const recentReadings = sorted.filter((r) => new Date(r.scrapedAt) >= windowStart);
+  const recentDailyRate =
+    recentReadings.length >= 2 ? dailyUsageRate(recentReadings, deliveries) : lifetimeDailyRate;
+
+  const recentSpanDays =
+    recentReadings.length >= 2
+      ? Math.max(
+          1,
+          (new Date(recentReadings[recentReadings.length - 1].scrapedAt).getTime() -
+            new Date(recentReadings[0].scrapedAt).getTime()) /
+            (1000 * 60 * 60 * 24)
+        )
+      : 0;
+
+  // Weight recent usage by how much of the window it actually covers, capped at
+  // 80% so the lifetime rate always anchors the estimate.
+  const recentWeight = Math.min(1, recentSpanDays / REFILL_RECENT_WINDOW_DAYS) * 0.8;
+  const blendedRate = recentWeight * recentDailyRate + (1 - recentWeight) * lifetimeDailyRate;
+
+  const base: RefillEstimate = {
+    status: "ok",
+    percentBasis,
+    currentGallons,
+    currentPercent,
+    refillThresholdPercent,
+    refillThresholdGallons,
+    gallonsUntilRefill,
+    dailyRate: blendedRate,
+    recentDailyRate,
+    lifetimeDailyRate,
+    recentWindowDays: REFILL_RECENT_WINDOW_DAYS,
+    daysUntilRefill: null,
+    daysUntilRefillSoonest: null,
+    daysUntilRefillLatest: null,
+    refillByDate: null,
+    refillBySoonest: null,
+    refillByLatest: null,
+    confidence: "low",
+  };
+
+  // Already at/below the refill threshold (compared in the chosen basis).
+  if (currentPercent <= refillThresholdPercent || gallonsUntilRefill <= 0) {
+    return {
+      ...base,
+      status: "refill_now",
+      daysUntilRefill: 0,
+      daysUntilRefillSoonest: 0,
+      daysUntilRefillLatest: 0,
+      refillByDate: toDateOnly(now),
+      refillBySoonest: toDateOnly(now),
+      refillByLatest: toDateOnly(now),
+      confidence: "high",
+    };
+  }
+
+  // No measurable usage to extrapolate from (e.g. brand-new tank, or a long flat
+  // stretch below gauge resolution).
+  if (blendedRate <= 0) {
+    return { ...base, status: "insufficient_data" };
+  }
+
+  const daysPoint = gallonsUntilRefill / blendedRate;
+  const candidateRates = [recentDailyRate, lifetimeDailyRate, blendedRate].filter((r) => r > 0);
+  const rateFast = Math.max(...candidateRates); // faster burn -> sooner
+  const rateSlow = Math.min(...candidateRates); // slower burn -> later
+  const daysSoonest = gallonsUntilRefill / rateFast;
+  const daysLatest = gallonsUntilRefill / rateSlow;
+
+  // Confidence from how much recent data we have and how much the recent rate
+  // disagrees with the lifetime rate.
+  const divergence =
+    lifetimeDailyRate > 0 ? Math.abs(recentDailyRate - lifetimeDailyRate) / lifetimeDailyRate : 1;
+  let confidence: RefillEstimate["confidence"] = "medium";
+  if (recentSpanDays >= 14 && divergence < 0.4) confidence = "high";
+  else if (recentSpanDays < 7 || divergence > 1) confidence = "low";
+
+  return {
+    ...base,
+    status: "ok",
+    daysUntilRefill: Math.floor(daysPoint),
+    daysUntilRefillSoonest: Math.floor(daysSoonest),
+    daysUntilRefillLatest: Math.floor(daysLatest),
+    refillByDate: toDateOnly(addDaysToDate(now, daysPoint)),
+    refillBySoonest: toDateOnly(addDaysToDate(now, daysSoonest)),
+    refillByLatest: toDateOnly(addDaysToDate(now, daysLatest)),
+    confidence,
+  };
+}
+
 /**
  * Calculate consumption analytics
  */
 export function calculateConsumptionAnalytics(
   readings: TankReading[],
-  deliveries: Delivery[]
+  deliveries: Delivery[],
+  refillOpts: RefillOptions = {}
 ): ConsumptionAnalytics | null {
   if (readings.length < 2) return null;
 
@@ -401,6 +634,7 @@ export function calculateConsumptionAnalytics(
     estimatedDaysUntilEmpty,
     costSinceLastDelivery,
     avgCostPerDay,
+    refillEstimate: calculateRefillEstimate(readings, deliveries, refillOpts),
   };
 }
 

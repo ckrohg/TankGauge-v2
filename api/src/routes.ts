@@ -4,6 +4,7 @@ import { requireAuth, getUserId, getUserEmail } from "./middleware/auth.js";
 import { storage } from "./storage.js";
 import { tankFarmScraper } from "./services/tankfarm-scraper.js";
 import { taskScheduler } from "./services/scheduler.js";
+import { sendWeeklyUpdate } from "./services/email.js";
 import { calculateConsumptionAnalytics, calculateMonthlyStats, calculateDailyConsumption, calculateDailyConsumptionFilled, calculateLast28DaysStats, calculateWeeklyConsumption } from "./utils/cost-calculator.js";
 import { insertSettingsSchema, insertTankShareSchema } from "./schema.js";
 
@@ -66,6 +67,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating settings:", error);
       res.status(400).json({ error: "Failed to update settings" });
+    }
+  });
+
+  // Send the real weekly digest on demand, to the requesting user's inbox.
+  app.post("/api/notifications/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = getUserId(req);
+      const dataUserId = await getEffectiveUserId(userId);
+      const settings = await storage.getSettings(userId);
+      if (!settings) {
+        return res.status(400).json({ error: "No settings found for this account." });
+      }
+      const ok = await sendWeeklyUpdate(dataUserId, settings, userId);
+      if (!ok) {
+        return res.status(502).json({
+          error:
+            "Email not sent. Confirm email is configured (RESEND_API_KEY) and that you have tank data.",
+        });
+      }
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("Error sending test digest:", error);
+      res.status(500).json({ error: "Failed to send test digest" });
     }
   });
 
@@ -173,15 +197,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (startDate) options.startDate = new Date(startDate as string);
       if (endDate) options.endDate = new Date(endDate as string);
 
-      const [readings, deliveryList] = await Promise.all([
+      const [readings, deliveryList, settings, maxGallons] = await Promise.all([
         storage.getTankReadings(userId, options),
         storage.getDeliveries(userId),
+        storage.getSettings(userId),
+        storage.getMaxRecordedGallons(userId),
       ]);
 
-      const analytics = calculateConsumptionAnalytics(readings, deliveryList);
+      const analytics = calculateConsumptionAnalytics(readings, deliveryList, {
+        refillThresholdPercent: settings?.refillThresholdPct ? Number(settings.refillThresholdPct) : 30,
+        percentBasis: (settings?.percentBasis as "relative" | "absolute") || "relative",
+        maxGallons,
+      });
       res.json(analytics || {
         dailyAverage: 0, weeklyAverage: 0, monthlyAverage: 0,
         estimatedDaysUntilEmpty: 0, costSinceLastDelivery: 0, avgCostPerDay: 0,
+        refillEstimate: null,
       });
     } catch (error) {
       console.error("Error calculating analytics:", error);
