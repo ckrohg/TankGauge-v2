@@ -7,3 +7,8 @@ dist/
 .DS_Store
 supabase/.temp/
 .vercel
+
+# Local tooling / agent config
+.claude/
+.mcp.json
+.tenet/
