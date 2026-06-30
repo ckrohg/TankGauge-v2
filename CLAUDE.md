@@ -111,11 +111,13 @@ The scheduler runs a cron every 30 minutes checking for due users. For `twice-da
 - **Morning**: 6:38 AM UTC (window=morning, offset=38min)
 - **Evening**: 6:38 PM UTC (window=evening, offset=38min)
 
-**Deduplication**: Readings are deduplicated by `tankfarmLastUpdate` timestamp. If tankfarm.io hasn't updated since the last scrape, the reading is skipped. In practice, **tankfarm.io only updates once per day** (typically late afternoon/evening UTC), so:
-- Morning scrape runs but sees unchanged `tankfarmLastUpdate` → skipped as duplicate
-- Evening scrape finds new data → saved
+**Deduplication**: Readings are deduplicated by `tankfarmLastUpdate` timestamp. If tankfarm.io hasn't updated since the last scrape, the reading is skipped. In practice, **tankfarm.io only updates once per day**, around ~19:40 UTC (late afternoon/evening, somewhat variable). The two scrapes actually execute near **07:00 UTC** (morning) and **19:00 UTC** (evening). Because tankfarm's daily update usually lands *after* the 19:00 evening scrape but *before* the next 07:00 morning scrape:
+- Evening scrape (19:00) usually runs before tankfarm has updated → sees unchanged `tankfarmLastUpdate` → skipped as duplicate
+- Morning scrape (07:00) picks up the previous evening's update → saved
 
-This results in 1 reading/day despite `twice-daily` setting. This is correct behavior — no data is lost since market prices are also identical between scrapes. Both scrapes execute successfully; only the evening one has new data to save.
+So the **morning** scrape is normally the one that saves, with a ~12h lag behind tankfarm's update. On days where tankfarm updates earlier than 19:00, the evening scrape saves instead. Observed over 30 days: ~21 saves at 07:00 vs ~10 at 19:00.
+
+This results in ~1 reading/day despite the `twice-daily` setting. This is correct behavior — no data is lost since market prices are also identical between scrapes. Both windows execute successfully; only whichever one first sees a new `tankfarmLastUpdate` saves a row.
 
 ### Schedule Config (in `settings` table)
 
