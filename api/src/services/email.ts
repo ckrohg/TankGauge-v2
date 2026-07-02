@@ -388,4 +388,67 @@ export async function sendLowLevelAlert(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Staleness watchdog alert
+// ---------------------------------------------------------------------------
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"]/g, (c) =>
+    c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&quot;"
+  );
+}
+
+// Sent by the scheduler when no new reading has saved for a long time. `broken`
+// distinguishes an app-side failure (scraper erroring) from the benign case
+// (scraper healthy, tankfarm.io just hasn't published) so the email says the
+// right thing.
+export async function sendStalenessAlert(
+  userId: string,
+  settings: Settings,
+  info: {
+    ageHours: number;
+    lastReadingAt: Date;
+    broken: boolean;
+    failures: number;
+    lastFailureReason?: string | null;
+  }
+): Promise<boolean> {
+  const lastSeen =
+    info.lastReadingAt.toLocaleString("en-US", {
+      timeZone: "UTC",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }) + " UTC";
+
+  const intro = info.broken
+    ? `No new tank reading has saved in <strong>${info.ageHours} hours</strong>, and the scraper has <strong>${info.failures} consecutive failure${
+        info.failures === 1 ? "" : "s"
+      }</strong>${
+        info.lastFailureReason ? ` — <em>${escapeHtml(info.lastFailureReason)}</em>` : ""
+      }. This looks like an app-side problem; the Railway logs are the place to look.`
+    : `No new tank reading has saved in <strong>${info.ageHours} hours</strong>, but the scraper itself is healthy (0 failures). tankfarm.io most likely hasn't published new data — it updates ~once a day and occasionally skips one. No action needed unless this keeps climbing.`;
+
+  const body = `
+    <div style="font-size:15px;line-height:1.5;color:#3f3f46;margin-bottom:20px;">${intro}</div>
+    <table style="width:100%;border-collapse:collapse;">
+      ${metricRow("Last saved reading", lastSeen, `${info.ageHours}h ago`)}
+      ${metricRow("Scraper failures", String(info.failures), info.broken ? "check Railway logs" : "healthy")}
+    </table>
+  `;
+
+  const subject = info.broken
+    ? `⚠️ TankGauge: scraper may be down (no data in ${info.ageHours}h)`
+    : `ℹ️ TankGauge: no new tank data in ${info.ageHours}h`;
+
+  return send({
+    userId,
+    settings,
+    subject,
+    html: layout(info.broken ? "Scraper may be failing" : "No new tank data", body),
+    kind: "staleness-alert",
+  });
+}
+
 export const emailEnabled = !!resend;

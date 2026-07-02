@@ -29,6 +29,8 @@ export const settings = pgTable("settings", {
   notifyEmail: text("notify_email"),
   lowAlertSentAt: timestamp("low_alert_sent_at", { withTimezone: true }),
   weeklyEmailLastSentAt: timestamp("weekly_email_last_sent_at", { withTimezone: true }),
+  // Staleness watchdog arm/clear state (see migration 005)
+  stalenessAlertedAt: timestamp("staleness_alerted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

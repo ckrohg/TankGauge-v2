@@ -1,7 +1,7 @@
 import cron, { type ScheduledTask } from "node-cron";
 import { storage } from "../storage.js";
 import { tankFarmScraper } from "./tankfarm-scraper.js";
-import { sendWeeklyUpdate, sendLowLevelAlert } from "./email.js";
+import { sendWeeklyUpdate, sendLowLevelAlert, sendStalenessAlert } from "./email.js";
 import { effectivePercent, type PercentBasis } from "../utils/cost-calculator.js";
 import type { Settings, InsertTankReading, TankReading } from "../schema.js";
 import {
@@ -159,7 +159,23 @@ export class TaskScheduler {
       }
       
       // Then check for users due at their scheduled time
-      await this.checkAndRunDueUsers();
+      try {
+        await this.checkAndRunDueUsers();
+      } catch (err) {
+        console.error("[SCHEDULER] Error in due-user check:", err);
+      }
+
+      // Staleness watchdog: alert once if no new reading has saved in >48h
+      // (external tankfarm.io outage or a broken scraper); re-arms on recovery.
+      try {
+        await this.checkStaleness();
+      } catch (err) {
+        console.error("[SCHEDULER] Error in staleness check:", err);
+      }
+
+      // Dead-man's-switch heartbeat: ping an external monitor at the end of every
+      // tick, so if this whole loop/container dies, that monitor alerts on its own.
+      await this.pingHeartbeat();
     });
     
     this.cronTasks.set("main", task);
@@ -675,6 +691,86 @@ export class TaskScheduler {
     }
 
     console.log(`[SCHEDULER] 📧 Weekly digest complete — ${sent} sent`);
+  }
+
+  /**
+   * Staleness watchdog — emails once when no new tank_readings row has saved in
+   * more than STALE_HOURS, then clears/re-arms when data resumes. This is distinct
+   * from a scraper failure: the scraper can run cleanly for a day+ with nothing new
+   * to save because tankfarm.io only publishes ~once/day and occasionally skips a
+   * day. The threshold is deliberately set ABOVE a normal single-skip gap (~36h has
+   * been observed while healthy) so only a genuine multi-day stall alerts. State
+   * lives in settings.staleness_alerted_at so it survives restarts/redeploys.
+   * Runs on every 30-min tick, so a crossing is detected within 30 minutes.
+   */
+  private async checkStaleness(): Promise<void> {
+    const STALE_HOURS = 48;
+    const allSettings = await storage.getAllSettings();
+    const now = new Date();
+
+    for (const settings of allSettings) {
+      // Only the scraping account(s) — a data-staleness watch is meaningless for
+      // share-only viewers who have no tank of their own.
+      if (!settings.tankfarmUsername || !settings.tankfarmPassword) continue;
+
+      const latest = await storage.getLatestTankReading(settings.userId);
+      if (!latest) continue; // never scraped — don't alert during bootstrap
+
+      const ageHours =
+        (now.getTime() - new Date(latest.scrapedAt).getTime()) / (1000 * 60 * 60);
+
+      try {
+        if (ageHours > STALE_HOURS) {
+          if (!settings.stalenessAlertedAt) {
+            const failures = settings.consecutiveFailures || 0;
+            const sent = await sendStalenessAlert(settings.userId, settings, {
+              ageHours: Math.round(ageHours),
+              lastReadingAt: new Date(latest.scrapedAt),
+              broken: failures > 0,
+              failures,
+              lastFailureReason: settings.lastFailureReason,
+            });
+            if (sent) {
+              await storage.updateSettings(settings.id, settings.userId, {
+                stalenessAlertedAt: now,
+              });
+              console.log(
+                `[SCHEDULER] ⚠️ Staleness alert sent for user ${settings.userId} (${Math.round(
+                  ageHours
+                )}h stale, brokenScraper=${failures > 0})`
+              );
+            }
+          }
+        } else if (settings.stalenessAlertedAt) {
+          // Data resumed — clear so the next stale episode can alert again.
+          await storage.updateSettings(settings.id, settings.userId, {
+            stalenessAlertedAt: null,
+          });
+          console.log(
+            `[SCHEDULER] ✓ Data resumed for user ${settings.userId} — staleness alert re-armed`
+          );
+        }
+      } catch (err) {
+        console.error(`[SCHEDULER] Staleness check failed for user ${settings.userId}:`, err);
+      }
+    }
+  }
+
+  /**
+   * External dead-man's-switch. Pings HEALTHCHECK_PING_URL (e.g. healthchecks.io)
+   * at the end of every scheduler tick. If this container/loop dies — taking both
+   * the scraper AND the staleness watchdog down — the external monitor sees pings
+   * stop and alerts from independent infrastructure. No-op until the URL is set in
+   * Railway, so it's safe to ship dark.
+   */
+  private async pingHeartbeat(): Promise<void> {
+    const url = process.env.HEALTHCHECK_PING_URL?.trim();
+    if (!url) return;
+    try {
+      await fetch(url, { method: "GET" });
+    } catch (err) {
+      console.warn("[SCHEDULER] Heartbeat ping failed:", err);
+    }
   }
 
   stop(): void {

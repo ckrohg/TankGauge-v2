@@ -4,7 +4,7 @@ import { requireAuth, getUserId, getUserEmail } from "./middleware/auth.js";
 import { storage } from "./storage.js";
 import { tankFarmScraper } from "./services/tankfarm-scraper.js";
 import { taskScheduler } from "./services/scheduler.js";
-import { sendWeeklyUpdate } from "./services/email.js";
+import { sendWeeklyUpdate, sendStalenessAlert } from "./services/email.js";
 import { calculateConsumptionAnalytics, calculateMonthlyStats, calculateDailyConsumption, calculateDailyConsumptionFilled, calculateLast28DaysStats, calculateWeeklyConsumption } from "./utils/cost-calculator.js";
 import { insertSettingsSchema, insertTankShareSchema } from "./schema.js";
 
@@ -90,6 +90,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error sending test digest:", error);
       res.status(500).json({ error: "Failed to send test digest" });
+    }
+  });
+
+  // Fire a sample staleness alert on demand, reflecting the real current data age.
+  // Lets us confirm the watchdog's email path end-to-end without waiting 48h.
+  app.post("/api/notifications/test-stale", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = getUserId(req);
+      const settings = await storage.getSettings(userId);
+      if (!settings) {
+        return res.status(400).json({ error: "No settings found for this account." });
+      }
+      const latest = await storage.getLatestTankReading(await getEffectiveUserId(userId));
+      if (!latest) {
+        return res.status(400).json({ error: "No readings yet — nothing to report on." });
+      }
+      const ageHours = Math.round(
+        (Date.now() - new Date(latest.scrapedAt).getTime()) / (1000 * 60 * 60)
+      );
+      const failures = settings.consecutiveFailures || 0;
+      const ok = await sendStalenessAlert(userId, settings, {
+        ageHours,
+        lastReadingAt: new Date(latest.scrapedAt),
+        broken: failures > 0,
+        failures,
+        lastFailureReason: settings.lastFailureReason,
+      });
+      if (!ok) {
+        return res.status(502).json({
+          error: "Email not sent. Confirm RESEND_API_KEY is set and a recipient email is configured.",
+        });
+      }
+      res.json({ ok: true, ageHours });
+    } catch (error) {
+      console.error("Error sending test staleness alert:", error);
+      res.status(500).json({ error: "Failed to send test staleness alert" });
     }
   });
 
