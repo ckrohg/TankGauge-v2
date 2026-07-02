@@ -179,8 +179,6 @@ interface WeeklySummary {
   price30Low: number | null;
   price30High: number | null;
   deliveriesThisWeek: Delivery[];
-  capacity: number;
-  pctFull: number; // physical tank: gallons / capacity
   dailyUsage: number[]; // gallons used per day, last 30 days (zero-filled)
 }
 
@@ -232,9 +230,6 @@ async function buildWeeklySummary(userId: string, settings: Settings): Promise<W
 
   const deliveriesThisWeek = deliveryList.filter((d) => new Date(d.deliveryDate) >= weekAgo);
 
-  const capacity = parseFloat(latest.tankCapacity);
-  const currentGallons = parseFloat(latest.remainingGallons);
-  const pctFull = capacity > 0 ? Math.round((currentGallons / capacity) * 100) : 0;
   const dailyUsage = calculateDailyConsumptionFilled(readings, deliveryList)
     .slice(-30)
     .map((d) => d.gallonsUsed);
@@ -256,8 +251,6 @@ async function buildWeeklySummary(userId: string, settings: Settings): Promise<W
     price30Low,
     price30High,
     deliveriesThisWeek,
-    capacity,
-    pctFull,
     dailyUsage,
   };
 }
@@ -324,15 +317,15 @@ type TankImages = { gaugeUrl: string; chartUrl: string } | null;
 // carries all the same numbers, so images are a pure enhancement.
 function heroBlock(s: WeeklySummary, images: TankImages): string {
   if (!images) {
-    return `<div style="text-align:center;font-size:16px;color:#18181b;margin:6px 0 14px;"><strong>${s.currentGallons.toFixed(
+    return `<div style="text-align:center;font-size:16px;color:#18181b;margin:6px 0 14px;"><strong>${s.currentPercent.toFixed(
       0
-    )} gal</strong> · ${s.pctFull}% full</div>`;
+    )}% of full</strong> · ${s.currentGallons.toFixed(0)} gal</div>`;
   }
   const total30 = s.dailyUsage.reduce((a, b) => a + b, 0);
   return `
-    <div style="text-align:center;padding:8px 0;"><img src="${images.gaugeUrl}" width="180" height="180" alt="Tank level: ${s.currentGallons.toFixed(
+    <div style="text-align:center;padding:8px 0;"><img src="${images.gaugeUrl}" width="180" height="180" alt="Tank level: ${s.currentPercent.toFixed(
       0
-    )} gallons, ${s.pctFull}% full" style="display:inline-block;border:0;"/></div>
+    )}% of full, ${s.currentGallons.toFixed(0)} gallons" style="display:inline-block;border:0;"/></div>
     <h2 style="font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#71717a;margin:16px 0 6px;">Usage · last 30 days</h2>
     <img src="${images.chartUrl}" width="100%" alt="Daily usage, last 30 days" style="display:block;max-width:100%;border:0;"/>
     <div style="font-size:12px;color:#a1a1aa;margin-top:4px;">30-day total: <strong style="color:#3f3f46;">${total30.toFixed(
@@ -397,8 +390,7 @@ export async function sendWeeklyUpdate(
     userId,
     kind: "weekly",
     gallons: summary.currentGallons,
-    capacity: summary.capacity,
-    pctFull: summary.pctFull,
+    percent: summary.currentPercent,
     dailyUsage: summary.dailyUsage,
   });
   const { subject, html } = renderWeeklyEmail(summary, images);
@@ -495,8 +487,7 @@ export async function sendStalenessAlert(
         userId,
         kind: "staleness",
         gallons: summary.currentGallons,
-        capacity: summary.capacity,
-        pctFull: summary.pctFull,
+        percent: summary.currentPercent,
         dailyUsage: summary.dailyUsage,
       });
       statusBlock = `

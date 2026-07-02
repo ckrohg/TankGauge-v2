@@ -16,9 +16,9 @@ export function levelColor(pctFull: number): string {
   return pctFull > 40 ? GREEN : pctFull > 20 ? AMBER : RED;
 }
 
-function gaugeSvg(gallons: number, pctFull: number): string {
+function gaugeSvg(gallons: number, percent: number): string {
   const cx = 100, cy = 100, r = 76, start = 135, sweep = 270;
-  const pct = Math.max(0, Math.min(100, pctFull));
+  const pct = Math.max(0, Math.min(100, percent));
   const P = (deg: number) => {
     const a = (deg * Math.PI) / 180;
     return [(cx + r * Math.cos(a)).toFixed(1), (cy + r * Math.sin(a)).toFixed(1)];
@@ -33,9 +33,9 @@ function gaugeSvg(gallons: number, pctFull: number): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
     <path d="${arc(start, start + sweep)}" fill="none" stroke="#e5e7eb" stroke-width="18" stroke-linecap="round"/>
     <path d="${arc(start, start + sweep * (pct / 100))}" fill="none" stroke="${color}" stroke-width="18" stroke-linecap="round"/>
-    <text x="100" y="96" text-anchor="middle" style="font:700 44px -apple-system,Inter,Arial;fill:#18181b">${Math.round(gallons)}</text>
-    <text x="100" y="116" text-anchor="middle" style="font:500 14px -apple-system,Inter,Arial;fill:#71717a">gallons</text>
-    <text x="100" y="150" text-anchor="middle" style="font:600 15px -apple-system,Inter,Arial;fill:${color}">${Math.round(pct)}% full</text>
+    <text x="100" y="94" text-anchor="middle" style="font:700 46px -apple-system,Inter,Arial;fill:${color}">${Math.round(pct)}%</text>
+    <text x="100" y="117" text-anchor="middle" style="font:600 15px -apple-system,Inter,Arial;fill:#3f3f46">${Math.round(gallons)} gal</text>
+    <text x="100" y="138" text-anchor="middle" style="font:500 12px -apple-system,Inter,Arial;fill:#a1a1aa">of full</text>
   </svg>`;
 }
 
@@ -87,8 +87,7 @@ export async function renderTankImages(opts: {
   userId: string;
   kind: string; // "weekly" | "staleness"
   gallons: number;
-  capacity: number;
-  pctFull: number;
+  percent: number; // relative to max fill (the app's default basis) — matches subject/table
   dailyUsage: number[];
 }): Promise<{ gaugeUrl: string; chartUrl: string } | null> {
   let browser: Browser | undefined;
@@ -101,7 +100,7 @@ export async function renderTankImages(opts: {
       await page.setContent(`<html><body style="margin:0;width:${w}px;height:${h}px">${svg}</body></html>`);
       return Buffer.from(await page.screenshot({ omitBackground: true, clip: { x: 0, y: 0, width: w, height: h } }));
     };
-    const gaugePng = await render(gaugeSvg(opts.gallons, opts.pctFull), 200, 200);
+    const gaugePng = await render(gaugeSvg(opts.gallons, opts.percent), 200, 200);
     const chartPng = await render(chartSvg(opts.dailyUsage), 560, 150);
 
     const day = new Date().toISOString().slice(0, 10);
