@@ -4,10 +4,12 @@ import { supabaseAdmin } from "../middleware/auth.js";
 import {
   calculateRefillEstimate,
   calculateDailyConsumption,
+  calculateDailyConsumptionFilled,
   effectivePercent,
   type RefillEstimate,
   type PercentBasis,
 } from "../utils/cost-calculator.js";
+import { renderTankImages } from "./email-images.js";
 import type { Settings, TankReading, Delivery } from "../schema.js";
 
 // ---------------------------------------------------------------------------
@@ -177,6 +179,9 @@ interface WeeklySummary {
   price30Low: number | null;
   price30High: number | null;
   deliveriesThisWeek: Delivery[];
+  capacity: number;
+  pctFull: number; // physical tank: gallons / capacity
+  dailyUsage: number[]; // gallons used per day, last 30 days (zero-filled)
 }
 
 async function buildWeeklySummary(userId: string, settings: Settings): Promise<WeeklySummary | null> {
@@ -227,6 +232,13 @@ async function buildWeeklySummary(userId: string, settings: Settings): Promise<W
 
   const deliveriesThisWeek = deliveryList.filter((d) => new Date(d.deliveryDate) >= weekAgo);
 
+  const capacity = parseFloat(latest.tankCapacity);
+  const currentGallons = parseFloat(latest.remainingGallons);
+  const pctFull = capacity > 0 ? Math.round((currentGallons / capacity) * 100) : 0;
+  const dailyUsage = calculateDailyConsumptionFilled(readings, deliveryList)
+    .slice(-30)
+    .map((d) => d.gallonsUsed);
+
   return {
     currentPercent: effectivePercent(
       parseFloat(latest.remainingGallons),
@@ -244,6 +256,9 @@ async function buildWeeklySummary(userId: string, settings: Settings): Promise<W
     price30Low,
     price30High,
     deliveriesThisWeek,
+    capacity,
+    pctFull,
+    dailyUsage,
   };
 }
 
@@ -302,7 +317,30 @@ function renderCoreMetrics(s: WeeklySummary, levelLabel: string): string {
     ${priceHistory}`;
 }
 
-function renderWeeklyEmail(s: WeeklySummary): { subject: string; html: string } {
+type TankImages = { gaugeUrl: string; chartUrl: string } | null;
+
+// Visual hero: radial gauge PNG + usage-chart PNG. Falls back to a clean text line
+// (never a broken-image box) when rendering/hosting failed. The metric table below
+// carries all the same numbers, so images are a pure enhancement.
+function heroBlock(s: WeeklySummary, images: TankImages): string {
+  if (!images) {
+    return `<div style="text-align:center;font-size:16px;color:#18181b;margin:6px 0 14px;"><strong>${s.currentGallons.toFixed(
+      0
+    )} gal</strong> · ${s.pctFull}% full</div>`;
+  }
+  const total30 = s.dailyUsage.reduce((a, b) => a + b, 0);
+  return `
+    <div style="text-align:center;padding:8px 0;"><img src="${images.gaugeUrl}" width="180" height="180" alt="Tank level: ${s.currentGallons.toFixed(
+      0
+    )} gallons, ${s.pctFull}% full" style="display:inline-block;border:0;"/></div>
+    <h2 style="font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#71717a;margin:16px 0 6px;">Usage · last 30 days</h2>
+    <img src="${images.chartUrl}" width="100%" alt="Daily usage, last 30 days" style="display:block;max-width:100%;border:0;"/>
+    <div style="font-size:12px;color:#a1a1aa;margin-top:4px;">30-day total: <strong style="color:#3f3f46;">${total30.toFixed(
+      0
+    )} gal</strong></div>`;
+}
+
+function renderWeeklyEmail(s: WeeklySummary, images: TankImages): { subject: string; html: string } {
   // Deliveries this week
   let deliveriesHtml = `<div style="font-size:14px;color:#71717a;">No refills this week.</div>`;
   if (s.deliveriesThisWeek.length > 0) {
@@ -325,6 +363,7 @@ function renderWeeklyEmail(s: WeeklySummary): { subject: string; html: string } 
   }
 
   const body = `
+    ${heroBlock(s, images)}
     ${renderCoreMetrics(s, "Current level")}
     <h2 style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#71717a;margin:24px 0 8px;">Refills this week</h2>
     ${deliveriesHtml}
@@ -354,7 +393,15 @@ export async function sendWeeklyUpdate(
     console.log(`[email] No data for weekly update for user ${userId} — skipping`);
     return false;
   }
-  const { subject, html } = renderWeeklyEmail(summary);
+  const images = await renderTankImages({
+    userId,
+    kind: "weekly",
+    gallons: summary.currentGallons,
+    capacity: summary.capacity,
+    pctFull: summary.pctFull,
+    dailyUsage: summary.dailyUsage,
+  });
+  const { subject, html } = renderWeeklyEmail(summary, images);
   return send({ userId, settings, subject, html, kind: "weekly-update", recipientUserId });
 }
 
@@ -444,8 +491,17 @@ export async function sendStalenessAlert(
   try {
     const summary = await buildWeeklySummary(userId, settings);
     if (summary) {
+      const images = await renderTankImages({
+        userId,
+        kind: "staleness",
+        gallons: summary.currentGallons,
+        capacity: summary.capacity,
+        pctFull: summary.pctFull,
+        dailyUsage: summary.dailyUsage,
+      });
       statusBlock = `
     <h2 style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#71717a;margin:24px 0 8px;">Last known status · as of ${lastSeen} (${info.ageHours}h ago)</h2>
+    ${heroBlock(summary, images)}
     ${renderCoreMetrics(summary, "Last known level")}`;
     }
   } catch (err) {
