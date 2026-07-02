@@ -103,8 +103,13 @@ export async function renderTankImages(opts: {
     const gaugePng = await render(gaugeSvg(opts.gallons, opts.percent), 200, 200);
     const chartPng = await render(chartSvg(opts.dailyUsage), 560, 150);
 
-    const day = new Date().toISOString().slice(0, 10);
-    const base = `${opts.kind}/${opts.userId}/${day}`;
+    // Unique per-send key. Email clients cache proxied images BY URL (Apple Mail's
+    // Protect Mail Activity, Gmail's googleusercontent proxy), so reusing a URL makes
+    // them serve the previously-cached image even after we overwrite the file. A
+    // unique path per render guarantees a fresh fetch. Never deleted, so archived
+    // emails keep resolving their own image.
+    const stamp = `${new Date().toISOString().slice(0, 10)}-${Date.now()}`;
+    const base = `${opts.kind}/${opts.userId}/${stamp}`;
     const up = async (name: string, buf: Buffer): Promise<string> => {
       const path = `${base}-${name}`;
       const { error } = await supabaseAdmin.storage
