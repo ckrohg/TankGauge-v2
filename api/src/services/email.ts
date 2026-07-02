@@ -247,7 +247,10 @@ async function buildWeeklySummary(userId: string, settings: Settings): Promise<W
   };
 }
 
-function renderWeeklyEmail(s: WeeklySummary): { subject: string; html: string } {
+// Renders the core status metrics table (level, refill, weekly usage, price)
+// shared by the weekly digest and the staleness alert's "last known" snapshot.
+// `levelLabel` lets the staleness alert say "Last known level" vs "Current level".
+function renderCoreMetrics(s: WeeklySummary, levelLabel: string): string {
   // Refill line
   let refillValue = "—";
   let refillSub: string | undefined;
@@ -285,6 +288,21 @@ function renderWeeklyEmail(s: WeeklySummary): { subject: string; html: string } 
         )} – ${fmtMoney(s.price30High)}/gal</div>`
       : "";
 
+  return `
+    <table style="width:100%;border-collapse:collapse;">
+      ${metricRow(
+        levelLabel,
+        `${s.currentPercent.toFixed(0)}% ${basisLabel(s.percentBasis)}`,
+        fmtGal(s.currentGallons)
+      )}
+      ${metricRow("Refill needed by", refillValue, refillSub)}
+      ${metricRow("Used this week", fmtGal(s.weekGallons), fmtMoney(s.weekCost))}
+      ${metricRow("Market price", priceValue, priceSub)}
+    </table>
+    ${priceHistory}`;
+}
+
+function renderWeeklyEmail(s: WeeklySummary): { subject: string; html: string } {
   // Deliveries this week
   let deliveriesHtml = `<div style="font-size:14px;color:#71717a;">No refills this week.</div>`;
   if (s.deliveriesThisWeek.length > 0) {
@@ -307,17 +325,7 @@ function renderWeeklyEmail(s: WeeklySummary): { subject: string; html: string } 
   }
 
   const body = `
-    <table style="width:100%;border-collapse:collapse;">
-      ${metricRow(
-        "Current level",
-        `${s.currentPercent.toFixed(0)}% ${basisLabel(s.percentBasis)}`,
-        fmtGal(s.currentGallons)
-      )}
-      ${metricRow("Refill needed by", refillValue, refillSub)}
-      ${metricRow("Used this week", fmtGal(s.weekGallons), fmtMoney(s.weekCost))}
-      ${metricRow("Market price", priceValue, priceSub)}
-    </table>
-    ${priceHistory}
+    ${renderCoreMetrics(s, "Current level")}
     <h2 style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#71717a;margin:24px 0 8px;">Refills this week</h2>
     ${deliveriesHtml}
   `;
@@ -430,12 +438,27 @@ export async function sendStalenessAlert(
       }. This looks like an app-side problem; the Railway logs are the place to look.`
     : `No new tank reading has saved in <strong>${info.ageHours} hours</strong>, but the scraper itself is healthy (0 failures). tankfarm.io most likely hasn't published new data — it updates ~once a day and occasionally skips one. No action needed unless this keeps climbing.`;
 
+  // Include a "last known" status snapshot from the same builder the weekly
+  // digest uses — clearly labeled as-of the last reading, since the data is stale.
+  let statusBlock = "";
+  try {
+    const summary = await buildWeeklySummary(userId, settings);
+    if (summary) {
+      statusBlock = `
+    <h2 style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#71717a;margin:24px 0 8px;">Last known status · as of ${lastSeen} (${info.ageHours}h ago)</h2>
+    ${renderCoreMetrics(summary, "Last known level")}`;
+    }
+  } catch (err) {
+    console.error(`[email] Failed to build status snapshot for staleness alert (${userId}):`, err);
+  }
+
   const body = `
     <div style="font-size:15px;line-height:1.5;color:#3f3f46;margin-bottom:20px;">${intro}</div>
     <table style="width:100%;border-collapse:collapse;">
       ${metricRow("Last saved reading", lastSeen, `${info.ageHours}h ago`)}
       ${metricRow("Scraper failures", String(info.failures), info.broken ? "check Railway logs" : "healthy")}
     </table>
+    ${statusBlock}
   `;
 
   const subject = info.broken
