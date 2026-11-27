@@ -39,6 +39,11 @@ supabase/ → Migrations (001_initial.sql, 002_tank_shares.sql)
 - CLI: `railway service TankGauge` to link, then `railway variables` to view/edit
 
 ### Supabase
+> **Shared project. Read before any schema change.** The `yuyoenfomyfxsnxwecsn` project (named "TankGauge") is the shared 6bb home project:
+> - `public` also holds **6bb-water's** tables (`devices`, `webauthn_credentials`, `push_subscriptions`, `valve_events`, `valve_state`, `enroll_tokens`, moved in 2026-11-27).
+> - Schema `bb` and the private `doorbell` bucket are **6bb-master's** live home-automation data. 6bb-master also reads TankGauge's tables (`PROPANE_SUPABASE_*`).
+> - `api/drizzle.config.ts` restricts drizzle-kit to TankGauge's 5 tables (`schemaFilter` + `tablesFilter`). Never remove those filters, and never pause, reset or restore this project for TankGauge's sake.
+
 - Project URL: https://yuyoenfomyfxsnxwecsn.supabase.co
 - DB pooler: `postgresql://postgres.yuyoenfomyfxsnxwecsn:[pw]@aws-1-us-east-1.pooler.supabase.com:6543/postgres` (transaction mode, 2-min statement timeout)
 - Auth: Email + password, JWT verified server-side via service role key
