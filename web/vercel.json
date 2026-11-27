@@ -1,5 +1,15 @@
 {
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "claude/**": false,
+      "delegate/**": false,
+      "codex/**": false,
+      "fix/**": false,
+      "verify/**": false,
+      "rebase/**": false
+    }
+  }
 }
